@@ -7,7 +7,11 @@ export interface AppConfig {
   codexCommand: string;
   codexCommandArgs: string[];
   codexProfile: string;
+  codexIgnoreUserConfig: boolean;
   codexDisablePlugins: boolean;
+  codexDisableShellSnapshot: boolean;
+  codexEphemeral: boolean;
+  codexIgnoreRules: boolean;
   codexTimeoutMs: number;
   openAICompatModel: string;
   callLoggingEnabled: boolean;
@@ -35,7 +39,11 @@ export function loadConfig(
       ? parseCommandArgs(env.CODEX_COMMAND_ARGS)
       : defaultCommand.args,
     codexProfile: env.CODEX_PROFILE ?? "plain",
+    codexIgnoreUserConfig: parseBoolean(env.CODEX_IGNORE_USER_CONFIG, true),
     codexDisablePlugins: parseBoolean(env.CODEX_DISABLE_PLUGINS, true),
+    codexDisableShellSnapshot: parseBoolean(env.CODEX_DISABLE_SHELL_SNAPSHOT, true),
+    codexEphemeral: parseBoolean(env.CODEX_EPHEMERAL, true),
+    codexIgnoreRules: parseBoolean(env.CODEX_IGNORE_RULES, true),
     codexTimeoutMs: parseInteger(env.CODEX_TIMEOUT_MS, 120000, "CODEX_TIMEOUT_MS"),
     openAICompatModel: env.OPENAI_COMPAT_MODEL ?? "local-codex",
     callLoggingEnabled: parseBoolean(env.CODEX_CALL_LOGGING, false),

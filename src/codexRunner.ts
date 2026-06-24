@@ -41,7 +41,11 @@ export interface CodexRunnerConfig {
   commandArgs?: string[];
   workspace: string;
   profile: string;
+  ignoreUserConfig?: boolean;
   disablePlugins?: boolean;
+  disableShellSnapshot?: boolean;
+  ephemeral?: boolean;
+  ignoreRules?: boolean;
   timeoutMs: number;
   maxOutputBytes?: number;
   spawn?: SpawnFn;
@@ -84,7 +88,11 @@ export function runCodexPrompt(
     commandArgs = [],
     workspace,
     profile,
+    ignoreUserConfig,
     disablePlugins,
+    disableShellSnapshot,
+    ephemeral,
+    ignoreRules,
     timeoutMs,
     maxOutputBytes = 1024 * 1024,
     spawn = nodeSpawn,
@@ -95,7 +103,11 @@ export function runCodexPrompt(
     commandArgs,
     workspace,
     profile,
+    ignoreUserConfig,
     disablePlugins,
+    disableShellSnapshot,
+    ephemeral,
+    ignoreRules,
     timeoutMs,
     maxOutputBytes,
     spawn,
@@ -109,7 +121,11 @@ export function runCodexPromptWithDetails(
     commandArgs = [],
     workspace,
     profile,
+    ignoreUserConfig = false,
     disablePlugins = false,
+    disableShellSnapshot = false,
+    ephemeral = false,
+    ignoreRules = false,
     timeoutMs,
     maxOutputBytes = 1024 * 1024,
     spawn = nodeSpawn,
@@ -120,9 +136,11 @@ export function runCodexPromptWithDetails(
     "exec",
     prompt,
     "--skip-git-repo-check",
-    "--profile",
-    profile,
+    ...(ignoreUserConfig ? ["--ignore-user-config"] : ["--profile", profile]),
     ...(disablePlugins ? ["--disable", "plugins"] : []),
+    ...(disableShellSnapshot ? ["--disable", "shell_snapshot"] : []),
+    ...(ephemeral ? ["--ephemeral"] : []),
+    ...(ignoreRules ? ["--ignore-rules"] : []),
   ];
   const commandDetails: CodexCommandDetails = {
     executable: command,

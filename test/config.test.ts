@@ -66,6 +66,33 @@ describe("config", () => {
     expect(config.codexDisablePlugins).toBe(false);
   });
 
+  it("enables lightweight Codex exec flags by default for API-launched runs", () => {
+    const config = loadConfig({}, "C:/repo", "linux");
+
+    expect(config.codexIgnoreUserConfig).toBe(true);
+    expect(config.codexEphemeral).toBe(true);
+    expect(config.codexIgnoreRules).toBe(true);
+    expect(config.codexDisableShellSnapshot).toBe(true);
+  });
+
+  it("allows lightweight Codex exec flags to be explicitly disabled", () => {
+    const config = loadConfig(
+      {
+        CODEX_IGNORE_USER_CONFIG: "false",
+        CODEX_EPHEMERAL: "false",
+        CODEX_IGNORE_RULES: "false",
+        CODEX_DISABLE_SHELL_SNAPSHOT: "false",
+      },
+      "C:/repo",
+      "linux",
+    );
+
+    expect(config.codexIgnoreUserConfig).toBe(false);
+    expect(config.codexEphemeral).toBe(false);
+    expect(config.codexIgnoreRules).toBe(false);
+    expect(config.codexDisableShellSnapshot).toBe(false);
+  });
+
   it("disables call logging by default", () => {
     const config = loadConfig({}, "C:/repo", "linux");
 

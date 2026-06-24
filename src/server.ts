@@ -40,7 +40,11 @@ export function createServer(options: CreateServerOptions = {}): FastifyInstance
       commandArgs: config.codexCommandArgs,
       workspace: config.codexWorkspace,
       profile: config.codexProfile,
+      ignoreUserConfig: config.codexIgnoreUserConfig,
       disablePlugins: config.codexDisablePlugins,
+      disableShellSnapshot: config.codexDisableShellSnapshot,
+      ephemeral: config.codexEphemeral,
+      ignoreRules: config.codexIgnoreRules,
       timeoutMs: config.codexTimeoutMs,
     });
   const callLogger = createCallLogger({

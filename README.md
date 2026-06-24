@@ -5,7 +5,7 @@ A local OpenAI-compatible HTTP wrapper for one-shot Codex CLI prompts.
 The service exposes a small non-streaming subset of the OpenAI API and runs each request through:
 
 ```bash
-codex exec "<prompt>" --skip-git-repo-check --profile plain
+codex exec "<prompt>" --skip-git-repo-check --ignore-user-config --disable plugins --disable shell_snapshot --ephemeral --ignore-rules
 ```
 
 ## Requirements
@@ -30,8 +30,12 @@ Runtime configuration is read from environment variables:
 | `CODEX_WORKSPACE` | current working directory | Fixed workspace root for every Codex run |
 | `CODEX_COMMAND` | npm Codex Node script on Windows, `codex` elsewhere | Codex executable |
 | `CODEX_COMMAND_ARGS` | npm Codex script path on Windows, empty elsewhere | Semicolon-separated fixed args inserted before `exec` |
-| `CODEX_PROFILE` | `plain` | Codex CLI profile |
+| `CODEX_PROFILE` | `plain` | Codex CLI profile, used only when `CODEX_IGNORE_USER_CONFIG=false` |
+| `CODEX_IGNORE_USER_CONFIG` | `true` | Add `--ignore-user-config` and omit `--profile` for API-launched Codex runs |
 | `CODEX_DISABLE_PLUGINS` | `true` | Add `--disable plugins` to API-launched Codex runs to avoid plugin-provided skills and plugin startup prompts |
+| `CODEX_DISABLE_SHELL_SNAPSHOT` | `true` | Add `--disable shell_snapshot` to reduce shell startup work |
+| `CODEX_EPHEMERAL` | `true` | Add `--ephemeral` to avoid persisting one-shot session files |
+| `CODEX_IGNORE_RULES` | `true` | Add `--ignore-rules` to skip user/project execpolicy rule loading |
 | `CODEX_TIMEOUT_MS` | `120000` | Per-request Codex timeout |
 | `OPENAI_COMPAT_MODEL` | `local-codex` | Model name returned by compatibility responses |
 | `CODEX_CALL_LOGGING` | `false` | Write every chat/responses call to JSONL when set to `true` |
@@ -81,9 +85,9 @@ The `json_schema` validator supports a practical subset: `type`, `properties`, `
 
 ## Codex Profiles And Plugins
 
-`CODEX_PROFILE=plain` passes `--profile plain`, which layers `$CODEX_HOME/plain.config.toml` on top of the base Codex config. Profiles do not automatically disable plugins unless the profile or command disables the `plugins` feature.
+When `CODEX_IGNORE_USER_CONFIG=false`, `CODEX_PROFILE=plain` passes `--profile plain`, which layers `$CODEX_HOME/plain.config.toml` on top of the base Codex config. Profiles do not automatically disable plugins unless the profile or command disables the `plugins` feature.
 
-By default this API also passes `--disable plugins`. This removes plugin-provided skills such as `superpowers` from API-launched one-shot calls while leaving the normal Codex CLI configuration untouched. Set `CODEX_DISABLE_PLUGINS=false` only if you intentionally want API calls to load Codex plugins.
+By default this API passes `--ignore-user-config`, `--disable plugins`, `--disable shell_snapshot`, `--ephemeral`, and `--ignore-rules`. This avoids user config, plugin-provided skills such as `superpowers`, shell snapshotting, session persistence, and rule loading for one-shot API calls while leaving the normal Codex CLI configuration untouched. Set the corresponding `CODEX_*` variable to `false` only if you intentionally want that Codex behavior for API calls.
 
 ## Call Logs
 
