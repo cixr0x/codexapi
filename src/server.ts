@@ -107,6 +107,7 @@ export function createServer(options: CreateServerOptions = {}): FastifyInstance
         requestBody: request.body,
         model: config.openAICompatModel,
         prompt,
+        codexCommand: runResult.command,
         rawStdout: runResult.stdout,
         rawStderr: runResult.stderr,
         outputText: runResult.stdout,
@@ -123,6 +124,7 @@ export function createServer(options: CreateServerOptions = {}): FastifyInstance
         requestBody: request.body,
         model: config.openAICompatModel,
         prompt,
+        codexCommand: runResult?.command ?? runnerErrorCommand(error),
         rawStdout: runResult?.stdout,
         rawStderr: runResult?.stderr ?? runnerErrorStderr(error),
         statusCode: mappedError.statusCode,
@@ -157,6 +159,7 @@ export function createServer(options: CreateServerOptions = {}): FastifyInstance
         requestBody: request.body,
         model: config.openAICompatModel,
         prompt,
+        codexCommand: runResult.command,
         rawStdout: runResult.stdout,
         rawStderr: runResult.stderr,
         outputText,
@@ -173,6 +176,7 @@ export function createServer(options: CreateServerOptions = {}): FastifyInstance
         requestBody: request.body,
         model: config.openAICompatModel,
         prompt,
+        codexCommand: runResult?.command ?? runnerErrorCommand(error),
         rawStdout: runResult?.stdout,
         rawStderr: runResult?.stderr ?? runnerErrorStderr(error),
         outputText,
@@ -266,6 +270,10 @@ async function logCall(
 
 function runnerErrorStderr(error: unknown): string | undefined {
   return error instanceof CodexRunnerError ? error.stderr : undefined;
+}
+
+function runnerErrorCommand(error: unknown): CodexRunResult["command"] {
+  return error instanceof CodexRunnerError ? error.command : undefined;
 }
 
 function createCallId(): string {

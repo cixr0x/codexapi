@@ -1,6 +1,8 @@
 import { appendFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 
+import { type CodexCommandDetails } from "./codexRunner.js";
+
 export interface CallLogEntry {
   id: string;
   timestamp: string;
@@ -9,6 +11,7 @@ export interface CallLogEntry {
   model?: string;
   requestBody?: unknown;
   prompt?: string;
+  codexCommand?: CodexCommandDetails;
   rawStdout?: string;
   rawStderr?: string;
   outputText?: string;

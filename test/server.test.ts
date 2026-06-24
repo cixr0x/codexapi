@@ -24,7 +24,16 @@ function fakeRunner(output = "Codex output") {
 
 function fakeDetailedRunner(stdout = "Codex output", stderr = "skill loaded") {
   const run = vi.fn<CodexRunner["run"]>(async () => stdout);
-  const runWithDetails = vi.fn(async () => ({ stdout, stderr }));
+  const runWithDetails = vi.fn(async () => ({
+    stdout,
+    stderr,
+    command: {
+      executable: "codex",
+      args: ["exec", "input: Hello", "--skip-git-repo-check", "--profile", "plain"],
+      cwd: "C:/workspace",
+      shell: false as const,
+    },
+  }));
   return { runner: { run, runWithDetails }, run, runWithDetails };
 }
 
@@ -187,6 +196,12 @@ describe("Fastify server", () => {
       prompt: "input: Hello",
       rawStdout: "Response from Codex",
       rawStderr: "skill log",
+      codexCommand: {
+        executable: "codex",
+        args: ["exec", "input: Hello", "--skip-git-repo-check", "--profile", "plain"],
+        cwd: "C:/workspace",
+        shell: false,
+      },
       outputText: "Response from Codex",
       statusCode: 200,
     });

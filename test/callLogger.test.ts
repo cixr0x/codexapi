@@ -36,6 +36,12 @@ describe("call logger", () => {
       prompt: "input: Hello",
       rawStdout: "OK",
       rawStderr: "skill loaded",
+      codexCommand: {
+        executable: "codex",
+        args: ["exec", "input: Hello", "--skip-git-repo-check", "--profile", "plain"],
+        cwd: "C:/workspace",
+        shell: false,
+      },
       outputText: "OK",
       durationMs: 12,
       statusCode: 200,
@@ -47,6 +53,12 @@ describe("call logger", () => {
       id: "call_123",
       endpoint: "/v1/responses",
       rawStderr: "skill loaded",
+      codexCommand: {
+        executable: "codex",
+        args: ["exec", "input: Hello", "--skip-git-repo-check", "--profile", "plain"],
+        cwd: "C:/workspace",
+        shell: false,
+      },
       statusCode: 200,
     });
   });

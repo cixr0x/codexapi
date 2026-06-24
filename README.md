@@ -82,7 +82,7 @@ The `json_schema` validator supports a practical subset: `type`, `properties`, `
 
 Set `CODEX_CALL_LOGGING=true` to write every `/v1/chat/completions` and `/v1/responses` call to `calls.jsonl` under `CODEX_CALL_LOG_DIR`.
 
-Each log entry includes the request body, generated Codex prompt, raw Codex stdout, raw Codex stderr, normalized output text, duration, status code, and error details when present. This can include sensitive prompt and response data, so keep it disabled outside local debugging.
+Each log entry includes the request body, generated Codex prompt, Codex command details (`executable`, `args`, `cwd`, and `shell`), raw Codex stdout, raw Codex stderr, normalized output text, duration, status code, and error details when present. This can include sensitive prompt and response data because the command args include the prompt, so keep it disabled outside local debugging.
 
 ## Examples
 

@@ -6,23 +6,27 @@ export class CodexRunnerError extends Error {
   readonly code: CodexRunnerErrorCode;
   readonly exitCode?: number | null;
   readonly stderr?: string;
+  readonly command?: CodexCommandDetails;
 
   constructor({
     message,
     code,
     exitCode,
     stderr,
+    command,
   }: {
     message: string;
     code: CodexRunnerErrorCode;
     exitCode?: number | null;
     stderr?: string;
+    command?: CodexCommandDetails;
   }) {
     super(message);
     this.name = "CodexRunnerError";
     this.code = code;
     this.exitCode = exitCode;
     this.stderr = stderr;
+    this.command = command;
   }
 }
 
@@ -42,9 +46,17 @@ export interface CodexRunnerConfig {
   spawn?: SpawnFn;
 }
 
+export interface CodexCommandDetails {
+  executable: string;
+  args: string[];
+  cwd: string;
+  shell: false;
+}
+
 export interface CodexRunResult {
   stdout: string;
   stderr: string;
+  command?: CodexCommandDetails;
 }
 
 export interface CodexRunner {
@@ -107,6 +119,12 @@ export function runCodexPromptWithDetails(
     "--profile",
     profile,
   ];
+  const commandDetails: CodexCommandDetails = {
+    executable: command,
+    args,
+    cwd: workspace,
+    shell: false,
+  };
 
   return new Promise((resolve, reject) => {
     let stdout = "";
@@ -128,6 +146,7 @@ export function runCodexPromptWithDetails(
             message: `Codex command timed out after ${timeoutMs} ms.`,
             code: "TIMEOUT",
             stderr,
+            command: commandDetails,
           }),
         );
       });
@@ -148,6 +167,7 @@ export function runCodexPromptWithDetails(
             message: `Failed to start Codex command: ${error.message}`,
             code: "SPAWN_ERROR",
             stderr,
+            command: commandDetails,
           }),
         );
       });
@@ -159,6 +179,7 @@ export function runCodexPromptWithDetails(
           resolve({
             stdout: stdout.trimEnd(),
             stderr: stderr.trimEnd(),
+            command: commandDetails,
           });
           return;
         }
@@ -169,6 +190,7 @@ export function runCodexPromptWithDetails(
             code: "NON_ZERO_EXIT",
             exitCode: code,
             stderr: stderr.trimEnd(),
+            command: commandDetails,
           }),
         );
       });

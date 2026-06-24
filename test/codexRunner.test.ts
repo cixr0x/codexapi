@@ -85,6 +85,12 @@ describe("Codex runner", () => {
     await expect(resultPromise).resolves.toEqual({
       stdout: "OK",
       stderr: "skill loader warning",
+      command: {
+        executable: "codex",
+        args: ["exec", "Hello", "--skip-git-repo-check", "--profile", "plain"],
+        cwd: "C:/workspace",
+        shell: false,
+      },
     });
   });
 
@@ -109,6 +115,19 @@ describe("Codex runner", () => {
       code: "NON_ZERO_EXIT",
       exitCode: 2,
       stderr: "Something failed",
+      command: {
+        executable: "codex",
+        args: [
+          "C:/codex/codex.js",
+          "exec",
+          "Hello",
+          "--skip-git-repo-check",
+          "--profile",
+          "plain",
+        ],
+        cwd: "C:/workspace",
+        shell: false,
+      },
     });
     expect(spawn).toHaveBeenCalledWith(
       "codex",
