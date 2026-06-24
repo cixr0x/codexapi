@@ -74,6 +74,13 @@ describe("config", () => {
     expect(config.codexEphemeral).toBe(true);
     expect(config.codexIgnoreRules).toBe(true);
     expect(config.codexDisableShellSnapshot).toBe(true);
+    expect(config.codexDefaultModel).toBe("gpt-5.4-mini");
+    expect(config.codexAllowedModels).toEqual([
+      "gpt-5.4-mini",
+      "gpt-5.5",
+      "gpt-5.3-codex-spark",
+      "gpt-5.4",
+    ]);
     expect(config.codexReasoningEffort).toBe("medium");
   });
 
@@ -128,6 +135,20 @@ describe("config", () => {
     const config = loadConfig({ CODEX_REASONING_EFFORT: "low" }, "C:/repo", "linux");
 
     expect(config.codexReasoningEffort).toBe("low");
+  });
+
+  it("parses Codex default and allowed model config", () => {
+    const config = loadConfig(
+      {
+        CODEX_DEFAULT_MODEL: "custom-fast",
+        CODEX_ALLOWED_MODELS: "custom-fast, custom-deep; gpt-5.5",
+      },
+      "C:/repo",
+      "linux",
+    );
+
+    expect(config.codexDefaultModel).toBe("custom-fast");
+    expect(config.codexAllowedModels).toEqual(["custom-fast", "custom-deep", "gpt-5.5"]);
   });
 
   it("rejects unsupported Codex backend names", () => {

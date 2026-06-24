@@ -141,10 +141,11 @@ export function createServer(options: CreateServerOptions = {}): FastifyInstance
     try {
       prompt = buildResponsesPrompt(request.body);
       const format = getResponseTextFormat(request.body);
-      runResult = await runPromptWithDetails(runner, prompt, {
-        ...codexOptionsForRequest(request.body, config),
-        outputSchema: outputSchemaForFormat(format),
-      });
+      runResult = await runPromptWithDetails(
+        runner,
+        prompt,
+        codexOptionsForResponses(request.body, config, format),
+      );
       outputText = normalizeStructuredOutput(runResult.stdout, format);
       const responseBody = createResponse({
         model: config.openAICompatModel,
@@ -256,9 +257,31 @@ async function runPromptWithDetails(
 
 function codexOptionsForRequest(body: unknown, config: AppConfig): CodexRunOptions {
   return {
-    model: requestModel(body) ?? config.openAICompatModel,
+    model: selectCodexModel(requestModel(body), config),
     reasoningEffort: config.codexReasoningEffort,
   };
+}
+
+function codexOptionsForResponses(
+  body: unknown,
+  config: AppConfig,
+  format: ResponseTextFormat | null,
+): CodexRunOptions {
+  const options = codexOptionsForRequest(body, config);
+  const outputSchema = outputSchemaForFormat(format);
+  if (outputSchema !== undefined) {
+    options.outputSchema = outputSchema;
+  }
+
+  return options;
+}
+
+function selectCodexModel(model: string | undefined, config: AppConfig): string {
+  if (model && config.codexAllowedModels.includes(model)) {
+    return model;
+  }
+
+  return config.codexDefaultModel;
 }
 
 function requestModel(body: unknown): string | undefined {

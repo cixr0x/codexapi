@@ -17,6 +17,8 @@ export interface AppConfig {
   codexEphemeral: boolean;
   codexIgnoreRules: boolean;
   codexTimeoutMs: number;
+  codexDefaultModel: string;
+  codexAllowedModels: string[];
   codexReasoningEffort: CodexReasoningEffort;
   codexAppServerUrl?: string;
   codexAppServerPort: number;
@@ -56,6 +58,13 @@ export function loadConfig(
     codexEphemeral: parseBoolean(env.CODEX_EPHEMERAL, true),
     codexIgnoreRules: parseBoolean(env.CODEX_IGNORE_RULES, true),
     codexTimeoutMs: parseInteger(env.CODEX_TIMEOUT_MS, 120000, "CODEX_TIMEOUT_MS"),
+    codexDefaultModel: parseString(env.CODEX_DEFAULT_MODEL, "gpt-5.4-mini"),
+    codexAllowedModels: parseList(env.CODEX_ALLOWED_MODELS, [
+      "gpt-5.4-mini",
+      "gpt-5.5",
+      "gpt-5.3-codex-spark",
+      "gpt-5.4",
+    ]),
     codexReasoningEffort: parseCodexReasoningEffort(env.CODEX_REASONING_EFFORT),
     codexAppServerUrl: env.CODEX_APP_SERVER_URL?.trim() || undefined,
     codexAppServerPort: parseInteger(
@@ -137,6 +146,24 @@ function parseCommandArgs(value: string): string[] {
     .split(";")
     .map((part) => part.trim())
     .filter(Boolean);
+}
+
+function parseList(value: string | undefined, fallback: string[]): string[] {
+  if (value == null || value === "") {
+    return fallback;
+  }
+
+  const parsed = value
+    .split(/[;,]/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+
+  return parsed.length ? parsed : fallback;
+}
+
+function parseString(value: string | undefined, fallback: string): string {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : fallback;
 }
 
 function parseBoolean(value: string | undefined, fallback: boolean): boolean {

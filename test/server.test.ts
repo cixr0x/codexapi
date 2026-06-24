@@ -56,6 +56,8 @@ function testConfig() {
     codexAppServerStartTimeoutMs: 10000,
     codexAppServerDisableApps: true,
     codexAppServerDisableNodeReplMcp: true,
+    codexDefaultModel: "gpt-5.4-mini",
+    codexAllowedModels: ["gpt-5.4-mini", "gpt-5.5"],
     codexReasoningEffort: "medium" as const,
     openAICompatModel: "local-codex-test",
     callLoggingEnabled: false,
@@ -96,6 +98,27 @@ describe("Fastify server", () => {
 
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual({ status: "ok" });
+    await app.close();
+  });
+
+  it("falls back to the default Codex model when chat completion model is invalid", async () => {
+    const { runner, runWithDetails } = fakeDetailedRunner("Hello from Codex");
+    const app = createServer({ config: testConfig(), runner });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/chat/completions",
+      payload: {
+        model: "local-codex",
+        messages: [{ role: "user", content: "Hello" }],
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(runWithDetails).toHaveBeenCalledWith("user: Hello\nassistant:", {
+      model: "gpt-5.4-mini",
+      reasoningEffort: "medium",
+    });
     await app.close();
   });
 
@@ -156,6 +179,26 @@ describe("Fastify server", () => {
     expect(response.statusCode).toBe(200);
     expect(runWithDetails).toHaveBeenCalledWith("input: Hello", {
       model: "gpt-5.5",
+      reasoningEffort: "medium",
+    });
+    await app.close();
+  });
+
+  it("falls back to the default Codex model when Responses model is absent", async () => {
+    const { runner, runWithDetails } = fakeDetailedRunner("Response from Codex");
+    const app = createServer({ config: testConfig(), runner });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/responses",
+      payload: {
+        input: "Hello",
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(runWithDetails).toHaveBeenCalledWith("input: Hello", {
+      model: "gpt-5.4-mini",
       reasoningEffort: "medium",
     });
     await app.close();
@@ -238,7 +281,7 @@ describe("Fastify server", () => {
 
     expect(response.statusCode).toBe(200);
     expect(runWithDetails).toHaveBeenCalledWith("input: Hello", {
-      model: "local-codex-test",
+      model: "gpt-5.4-mini",
       reasoningEffort: "medium",
     });
 
