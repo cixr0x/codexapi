@@ -1,5 +1,6 @@
 import cors from "@fastify/cors";
 import Fastify, { type FastifyInstance, type FastifyReply } from "fastify";
+import { pathToFileURL } from "node:url";
 
 import { type AppConfig, loadConfig } from "./config.js";
 import {
@@ -153,7 +154,11 @@ async function main(): Promise<void> {
   await app.listen({ host: config.host, port: config.port });
 }
 
-if (process.argv[1] && import.meta.url === new URL(process.argv[1], "file:").href) {
+export function isMainModule(importMetaUrl: string, argvPath: string | undefined): boolean {
+  return Boolean(argvPath && importMetaUrl === pathToFileURL(argvPath).href);
+}
+
+if (isMainModule(import.meta.url, process.argv[1])) {
   main().catch((error) => {
     console.error(error);
     process.exitCode = 1;

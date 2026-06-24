@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { CodexRunnerError, type CodexRunner } from "../src/codexRunner.js";
-import { createServer } from "../src/server.js";
+import { createServer, isMainModule } from "../src/server.js";
 
 function fakeRunner(output = "Codex output") {
   const run = vi.fn<CodexRunner["run"]>(async () => output);
@@ -21,6 +21,15 @@ function testConfig() {
 }
 
 describe("Fastify server", () => {
+  it("detects the entrypoint from a Windows argv path", () => {
+    expect(
+      isMainModule(
+        "file:///C:/PROJECTS/codexapi/dist/server.js",
+        "C:\\PROJECTS\\codexapi\\dist\\server.js",
+      ),
+    ).toBe(true);
+  });
+
   it("returns health status", async () => {
     const { runner } = fakeRunner();
     const app = createServer({ config: testConfig(), runner });
