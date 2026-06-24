@@ -5,7 +5,7 @@ A local OpenAI-compatible HTTP wrapper for one-shot Codex prompts.
 By default, the service exposes a small non-streaming subset of the OpenAI API and runs each request through:
 
 ```bash
-codex exec "<prompt>" --skip-git-repo-check --ignore-user-config --disable plugins --disable shell_snapshot --ephemeral --ignore-rules
+codex exec "<prompt>" --model <request.model> -c model_reasoning_effort="medium" --skip-git-repo-check --ignore-user-config --disable plugins --disable shell_snapshot --ephemeral --ignore-rules
 ```
 
 For local development, it can also use an experimental warm `codex app-server` backend to avoid spawning `codex exec` for every request.
@@ -40,12 +40,13 @@ Runtime configuration is read from environment variables:
 | `CODEX_EPHEMERAL` | `true` | Add `--ephemeral` to avoid persisting one-shot session files |
 | `CODEX_IGNORE_RULES` | `true` | Add `--ignore-rules` to skip user/project execpolicy rule loading |
 | `CODEX_TIMEOUT_MS` | `120000` | Per-request Codex timeout |
+| `CODEX_REASONING_EFFORT` | `medium` | Reasoning effort passed to Codex calls: `minimal`, `low`, `medium`, `high`, or `xhigh` |
 | `CODEX_APP_SERVER_URL` | unset | Existing app-server WebSocket URL to use when `CODEX_BACKEND=app-server` |
 | `CODEX_APP_SERVER_PORT` | `0` | Managed app-server port. `0` picks a free local port |
 | `CODEX_APP_SERVER_START_TIMEOUT_MS` | `10000` | Timeout for connecting to app-server |
 | `CODEX_APP_SERVER_DISABLE_APPS` | `true` | Start managed app-server with `--disable apps` |
 | `CODEX_APP_SERVER_DISABLE_NODE_REPL_MCP` | `true` | Start managed app-server with `-c mcp_servers.node_repl.enabled=false` |
-| `OPENAI_COMPAT_MODEL` | `local-codex` | Model name returned by compatibility responses |
+| `OPENAI_COMPAT_MODEL` | `local-codex` | Model name returned by `/v1/models` and compatibility responses. Set this to the default Codex model your clients send if they discover models from the API |
 | `CODEX_CALL_LOGGING` | `false` | Write every chat/responses call to JSONL when set to `true` |
 | `CODEX_CALL_LOG_DIR` | `.codexapi/logs` | Directory for `calls.jsonl` when call logging is enabled |
 
@@ -53,7 +54,7 @@ Example PowerShell setup:
 
 ```powershell
 $env:CODEX_WORKSPACE = "C:\PROJECTS\codexapi"
-$env:OPENAI_COMPAT_MODEL = "local-codex"
+$env:OPENAI_COMPAT_MODEL = "gpt-5.4-mini"
 npm run dev
 ```
 
@@ -78,6 +79,10 @@ npm start
 - `POST /v1/responses`
 
 Streaming is not supported. Requests with `stream: true` return an OpenAI-style `400` error.
+
+For API-to-Codex calls, the wrapper passes the caller's request-body `model` through to Codex. With the `exec` backend this becomes `--model <model>`. With the experimental `app-server` backend this becomes the `model` field on `turn/start`. `CODEX_REASONING_EFFORT` is also passed on every Codex call and defaults to `medium`.
+
+`OPENAI_COMPAT_MODEL` still controls the model id returned from `/v1/models` and compatibility response bodies. If a client sends `model: "local-codex"`, Codex receives `local-codex`; set the client model to a real Codex model such as `gpt-5.4-mini` or `gpt-5.5`.
 
 ## Structured Outputs
 
@@ -132,7 +137,7 @@ Chat Completions:
 curl http://127.0.0.1:3000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "local-codex",
+    "model": "gpt-5.4-mini",
     "messages": [
       { "role": "user", "content": "Hello" }
     ]
@@ -145,7 +150,7 @@ Responses:
 curl http://127.0.0.1:3000/v1/responses \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "local-codex",
+    "model": "gpt-5.4-mini",
     "instructions": "Be concise.",
     "input": "Hello"
   }'
@@ -157,7 +162,7 @@ Responses with JSON schema:
 curl http://127.0.0.1:3000/v1/responses \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "local-codex",
+    "model": "gpt-5.4-mini",
     "input": "Translate hello to Spanish.",
     "text": {
       "format": {

@@ -1,6 +1,7 @@
 import { join } from "node:path";
 
 export type CodexBackend = "exec" | "app-server";
+export type CodexReasoningEffort = "minimal" | "low" | "medium" | "high" | "xhigh";
 
 export interface AppConfig {
   host: string;
@@ -16,6 +17,7 @@ export interface AppConfig {
   codexEphemeral: boolean;
   codexIgnoreRules: boolean;
   codexTimeoutMs: number;
+  codexReasoningEffort: CodexReasoningEffort;
   codexAppServerUrl?: string;
   codexAppServerPort: number;
   codexAppServerStartTimeoutMs: number;
@@ -54,6 +56,7 @@ export function loadConfig(
     codexEphemeral: parseBoolean(env.CODEX_EPHEMERAL, true),
     codexIgnoreRules: parseBoolean(env.CODEX_IGNORE_RULES, true),
     codexTimeoutMs: parseInteger(env.CODEX_TIMEOUT_MS, 120000, "CODEX_TIMEOUT_MS"),
+    codexReasoningEffort: parseCodexReasoningEffort(env.CODEX_REASONING_EFFORT),
     codexAppServerUrl: env.CODEX_APP_SERVER_URL?.trim() || undefined,
     codexAppServerPort: parseInteger(
       env.CODEX_APP_SERVER_PORT,
@@ -154,4 +157,24 @@ function parseCodexBackend(value: string | undefined): CodexBackend {
   }
 
   throw new Error("CODEX_BACKEND must be one of: exec, app-server.");
+}
+
+function parseCodexReasoningEffort(value: string | undefined): CodexReasoningEffort {
+  if (value == null || value === "") {
+    return "medium";
+  }
+
+  if (
+    value === "minimal" ||
+    value === "low" ||
+    value === "medium" ||
+    value === "high" ||
+    value === "xhigh"
+  ) {
+    return value;
+  }
+
+  throw new Error(
+    "CODEX_REASONING_EFFORT must be one of: minimal, low, medium, high, xhigh.",
+  );
 }

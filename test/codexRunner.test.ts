@@ -126,6 +126,47 @@ describe("Codex runner", () => {
     });
   });
 
+  it("passes request model and reasoning effort to codex exec", async () => {
+    const child = new FakeChildProcess();
+    const spawn = createFakeSpawn(child);
+    const runner = createCodexRunner({
+      command: "codex",
+      commandArgs: [],
+      workspace: "C:/workspace",
+      profile: "plain",
+      ignoreUserConfig: true,
+      timeoutMs: 1000,
+      spawn,
+    });
+
+    const resultPromise = runner.runWithDetails!("Hello", {
+      model: "gpt-5.4-mini",
+      reasoningEffort: "medium",
+    });
+    child.stdout.push("OK\n");
+    child.close(0);
+
+    await expect(resultPromise).resolves.toMatchObject({ stdout: "OK" });
+    expect(spawn).toHaveBeenCalledWith(
+      "codex",
+      [
+        "exec",
+        "Hello",
+        "--skip-git-repo-check",
+        "--model",
+        "gpt-5.4-mini",
+        "-c",
+        "model_reasoning_effort=\"medium\"",
+        "--ignore-user-config",
+      ],
+      expect.objectContaining({
+        cwd: "C:/workspace",
+        shell: false,
+        windowsHide: true,
+      }),
+    );
+  });
+
   it("rejects with a typed error when codex exits non-zero", async () => {
     const child = new FakeChildProcess();
     const spawn = createFakeSpawn(child);

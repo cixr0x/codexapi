@@ -24,7 +24,7 @@ function fakeRunner(output = "Codex output") {
 
 function fakeDetailedRunner(stdout = "Codex output", stderr = "skill loaded") {
   const run = vi.fn<CodexRunner["run"]>(async () => stdout);
-  const runWithDetails = vi.fn(async () => ({
+  const runWithDetails = vi.fn<NonNullable<CodexRunner["runWithDetails"]>>(async () => ({
     stdout,
     stderr,
     command: {
@@ -56,6 +56,7 @@ function testConfig() {
     codexAppServerStartTimeoutMs: 10000,
     codexAppServerDisableApps: true,
     codexAppServerDisableNodeReplMcp: true,
+    codexReasoningEffort: "medium" as const,
     openAICompatModel: "local-codex-test",
     callLoggingEnabled: false,
     callLogDir: "C:/workspace/.codexapi/logs",
@@ -98,6 +99,27 @@ describe("Fastify server", () => {
     await app.close();
   });
 
+  it("passes the chat completion request model and default reasoning effort to Codex", async () => {
+    const { runner, runWithDetails } = fakeDetailedRunner("Hello from Codex");
+    const app = createServer({ config: testConfig(), runner });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/chat/completions",
+      payload: {
+        model: "gpt-5.4-mini",
+        messages: [{ role: "user", content: "Hello" }],
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(runWithDetails).toHaveBeenCalledWith("user: Hello\nassistant:", {
+      model: "gpt-5.4-mini",
+      reasoningEffort: "medium",
+    });
+    await app.close();
+  });
+
   it("returns an OpenAI-style model list", async () => {
     const { runner } = fakeRunner();
     const app = createServer({ config: testConfig(), runner });
@@ -114,6 +136,27 @@ describe("Fastify server", () => {
           owned_by: "local",
         },
       ],
+    });
+    await app.close();
+  });
+
+  it("passes the Responses request model and default reasoning effort to Codex", async () => {
+    const { runner, runWithDetails } = fakeDetailedRunner("Response from Codex");
+    const app = createServer({ config: testConfig(), runner });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/responses",
+      payload: {
+        model: "gpt-5.5",
+        input: "Hello",
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(runWithDetails).toHaveBeenCalledWith("input: Hello", {
+      model: "gpt-5.5",
+      reasoningEffort: "medium",
     });
     await app.close();
   });
@@ -194,7 +237,10 @@ describe("Fastify server", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(runWithDetails).toHaveBeenCalledWith("input: Hello");
+    expect(runWithDetails).toHaveBeenCalledWith("input: Hello", {
+      model: "local-codex-test",
+      reasoningEffort: "medium",
+    });
 
     const logContent = await readFile(join(logDir, "calls.jsonl"), "utf8");
     const entry = JSON.parse(logContent);

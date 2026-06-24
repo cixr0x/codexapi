@@ -52,6 +52,8 @@ export interface CodexRunnerConfig {
 }
 
 export interface CodexRunOptions {
+  model?: string;
+  reasoningEffort?: string;
   outputSchema?: unknown;
 }
 
@@ -79,8 +81,8 @@ export function createCodexRunner(config: CodexRunnerConfig): CodexRunner {
       const result = await runCodexPromptWithDetails(prompt, config);
       return result.stdout;
     },
-    runWithDetails(prompt: string) {
-      return runCodexPromptWithDetails(prompt, config);
+    runWithDetails(prompt: string, options?: CodexRunOptions) {
+      return runCodexPromptWithDetails(prompt, config, options);
     },
   };
 }
@@ -134,12 +136,19 @@ export function runCodexPromptWithDetails(
     maxOutputBytes = 1024 * 1024,
     spawn = nodeSpawn,
   }: CodexRunnerConfig,
+  options: CodexRunOptions = {},
 ): Promise<CodexRunResult> {
+  const model = normalizeStringOption(options.model);
+  const reasoningEffort = normalizeStringOption(options.reasoningEffort);
   const args = [
     ...commandArgs,
     "exec",
     prompt,
     "--skip-git-repo-check",
+    ...(model ? ["--model", model] : []),
+    ...(reasoningEffort
+      ? ["-c", `model_reasoning_effort=${tomlString(reasoningEffort)}`]
+      : []),
     ...(ignoreUserConfig ? ["--ignore-user-config"] : ["--profile", profile]),
     ...(disablePlugins ? ["--disable", "plugins"] : []),
     ...(disableShellSnapshot ? ["--disable", "shell_snapshot"] : []),
@@ -233,6 +242,15 @@ export function runCodexPromptWithDetails(
       action();
     }
   });
+}
+
+function normalizeStringOption(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function tomlString(value: string): string {
+  return `"${value.replaceAll("\\", "\\\\").replaceAll("\"", "\\\"")}"`;
 }
 
 function appendBounded(

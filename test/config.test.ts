@@ -74,6 +74,7 @@ describe("config", () => {
     expect(config.codexEphemeral).toBe(true);
     expect(config.codexIgnoreRules).toBe(true);
     expect(config.codexDisableShellSnapshot).toBe(true);
+    expect(config.codexReasoningEffort).toBe("medium");
   });
 
   it("allows lightweight Codex exec flags to be explicitly disabled", () => {
@@ -123,9 +124,21 @@ describe("config", () => {
     expect(config.codexAppServerDisableNodeReplMcp).toBe(false);
   });
 
+  it("parses Codex reasoning effort config", () => {
+    const config = loadConfig({ CODEX_REASONING_EFFORT: "low" }, "C:/repo", "linux");
+
+    expect(config.codexReasoningEffort).toBe("low");
+  });
+
   it("rejects unsupported Codex backend names", () => {
     expect(() => loadConfig({ CODEX_BACKEND: "sidecar" }, "C:/repo", "linux")).toThrow(
       "CODEX_BACKEND must be one of: exec, app-server.",
     );
+  });
+
+  it("rejects unsupported Codex reasoning effort values", () => {
+    expect(() =>
+      loadConfig({ CODEX_REASONING_EFFORT: "maximum" }, "C:/repo", "linux"),
+    ).toThrow("CODEX_REASONING_EFFORT must be one of: minimal, low, medium, high, xhigh.");
   });
 });

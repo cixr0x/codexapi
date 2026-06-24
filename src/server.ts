@@ -89,7 +89,8 @@ export function createServer(options: CreateServerOptions = {}): FastifyInstance
 
     try {
       prompt = buildChatPrompt(request.body);
-      runResult = await runPromptWithDetails(runner, prompt);
+      const codexOptions = codexOptionsForRequest(request.body, config);
+      runResult = await runPromptWithDetails(runner, prompt, codexOptions);
       const responseBody = createChatCompletion({
         model: config.openAICompatModel,
         content: runResult.stdout,
@@ -141,6 +142,7 @@ export function createServer(options: CreateServerOptions = {}): FastifyInstance
       prompt = buildResponsesPrompt(request.body);
       const format = getResponseTextFormat(request.body);
       runResult = await runPromptWithDetails(runner, prompt, {
+        ...codexOptionsForRequest(request.body, config),
         outputSchema: outputSchemaForFormat(format),
       });
       outputText = normalizeStructuredOutput(runResult.stdout, format);
@@ -239,7 +241,7 @@ async function runPromptWithDetails(
   options: CodexRunOptions = {},
 ): Promise<CodexRunResult> {
   if (runner.runWithDetails) {
-    if (options.outputSchema === undefined) {
+    if (!hasCodexRunOptions(options)) {
       return runner.runWithDetails(prompt);
     }
 
@@ -250,6 +252,30 @@ async function runPromptWithDetails(
     stdout: await runner.run(prompt),
     stderr: "",
   };
+}
+
+function codexOptionsForRequest(body: unknown, config: AppConfig): CodexRunOptions {
+  return {
+    model: requestModel(body) ?? config.openAICompatModel,
+    reasoningEffort: config.codexReasoningEffort,
+  };
+}
+
+function requestModel(body: unknown): string | undefined {
+  if (!isRecord(body)) {
+    return undefined;
+  }
+
+  const model = body.model;
+  return typeof model === "string" && model.trim() ? model.trim() : undefined;
+}
+
+function hasCodexRunOptions(options: CodexRunOptions): boolean {
+  return (
+    options.model !== undefined ||
+    options.reasoningEffort !== undefined ||
+    options.outputSchema !== undefined
+  );
 }
 
 function createConfiguredCodexRunner(config: AppConfig): CodexRunner {
@@ -332,6 +358,10 @@ function hasStatusCode(error: unknown): error is { statusCode: number } {
     "statusCode" in error &&
     typeof error.statusCode === "number"
   );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 async function main(): Promise<void> {

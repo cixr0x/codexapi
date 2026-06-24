@@ -125,6 +125,8 @@ class AppServerCodexRunner {
       socket,
       prompt,
       outputSchema: options.outputSchema,
+      model: options.model,
+      reasoningEffort: options.reasoningEffort,
       workspace: this.config.workspace,
       timeoutMs: this.config.timeoutMs,
       command,
@@ -232,6 +234,8 @@ function runPromptOverSocket({
   socket,
   prompt,
   outputSchema,
+  model,
+  reasoningEffort,
   workspace,
   timeoutMs,
   command,
@@ -240,6 +244,8 @@ function runPromptOverSocket({
   socket: AppServerWebSocket;
   prompt: string;
   outputSchema: unknown;
+  model: string | undefined;
+  reasoningEffort: string | undefined;
   workspace: string;
   timeoutMs: number;
   command: CodexCommandDetails;
@@ -312,6 +318,8 @@ function runPromptOverSocket({
           threadId,
           input: [{ type: "text", text: prompt, text_elements: [] }],
           ...(outputSchema !== undefined ? { outputSchema } : {}),
+          ...(model ? { model } : {}),
+          ...(reasoningEffort ? { effort: reasoningEffort } : {}),
           approvalPolicy: "never",
           sandboxPolicy: { type: "dangerFullAccess" },
           multiAgentMode: "none",

@@ -215,7 +215,11 @@ describe("app-server Codex runner", () => {
       required: ["answer"],
     };
 
-    const resultPromise = runner.runWithDetails!("input: Hello", { outputSchema });
+    const resultPromise = runner.runWithDetails!("input: Hello", {
+      outputSchema,
+      model: "gpt-5.4-mini",
+      reasoningEffort: "medium",
+    });
     await waitUntil(() => socket.listenerCount("open") > 0);
     socket.open();
     await waitUntil(() => socket.sent.length > 0);
@@ -257,6 +261,8 @@ describe("app-server Codex runner", () => {
         threadId: "thread-1",
         input: [{ type: "text", text: "input: Hello", text_elements: [] }],
         outputSchema,
+        model: "gpt-5.4-mini",
+        effort: "medium",
         approvalPolicy: "never",
         sandboxPolicy: { type: "dangerFullAccess" },
         multiAgentMode: "none",
