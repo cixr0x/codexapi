@@ -7,6 +7,17 @@ import {
   createChatCompletion,
   createResponse,
 } from "../src/openaiCompat.js";
+import { StructuredOutputError } from "../src/structuredOutput.js";
+
+const responseSchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    translatedText: { type: "string" },
+    alternates: { type: "array", items: { type: "string" } },
+  },
+  required: ["translatedText", "alternates"],
+};
 
 describe("OpenAI compatibility mapping", () => {
   it("converts chat messages into a role-labeled prompt ending with an assistant cue", () => {
@@ -67,6 +78,47 @@ describe("OpenAI compatibility mapping", () => {
     });
 
     expect(prompt).toBe("user: First line.\nSecond line.\nassistant: Prior answer.");
+  });
+
+  it("adds json_schema response format instructions to Responses prompts", () => {
+    const prompt = buildResponsesPrompt({
+      model: "local-codex",
+      input: "Translate hello.",
+      text: {
+        format: {
+          type: "json_schema",
+          name: "translation_result",
+          strict: true,
+          schema: responseSchema,
+        },
+      },
+    });
+
+    expect(prompt).toContain("input: Translate hello.");
+    expect(prompt).toContain("response_format:");
+    expect(prompt).toContain("Return only valid JSON");
+    expect(prompt).toContain("Format name: translation_result");
+    expect(prompt).toContain('"translatedText"');
+  });
+
+  it("adds json_object response format instructions to Responses prompts", () => {
+    const prompt = buildResponsesPrompt({
+      model: "local-codex",
+      input: "Return JSON.",
+      text: { format: { type: "json_object" } },
+    });
+
+    expect(prompt).toContain("Return a single JSON object.");
+  });
+
+  it("rejects unsupported Responses text formats", () => {
+    expect(() =>
+      buildResponsesPrompt({
+        model: "local-codex",
+        input: "Hello",
+        text: { format: { type: "grammar" } },
+      }),
+    ).toThrow(StructuredOutputError);
   });
 
   it("rejects streaming responses requests", () => {

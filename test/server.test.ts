@@ -3,6 +3,16 @@ import { describe, expect, it, vi } from "vitest";
 import { CodexRunnerError, type CodexRunner } from "../src/codexRunner.js";
 import { createServer, isMainModule } from "../src/server.js";
 
+const responseSchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    translatedText: { type: "string" },
+    alternates: { type: "array", items: { type: "string" } },
+  },
+  required: ["translatedText", "alternates"],
+};
+
 function fakeRunner(output = "Codex output") {
   const run = vi.fn<CodexRunner["run"]>(async () => output);
   return { runner: { run }, run };
@@ -112,6 +122,107 @@ describe("Fastify server", () => {
       model: "local-codex-test",
       status: "completed",
       output_text: "Response from Codex",
+    });
+    await app.close();
+  });
+
+  it("normalizes json_schema Responses output before returning it", async () => {
+    const { runner, run } = fakeRunner(
+      "Sure:\n{\"translatedText\":\"Hola\",\"alternates\":[\"Buenas\"]}",
+    );
+    const app = createServer({ config: testConfig(), runner });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/responses",
+      payload: {
+        model: "local-codex-test",
+        input: "Translate hello.",
+        text: {
+          format: {
+            type: "json_schema",
+            name: "translation_result",
+            strict: true,
+            schema: responseSchema,
+          },
+        },
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(run.mock.calls[0]?.[0]).toContain("Return only valid JSON");
+    expect(response.json()).toMatchObject({
+      object: "response",
+      output_text: "{\"translatedText\":\"Hola\",\"alternates\":[\"Buenas\"]}",
+      output: [
+        {
+          content: [
+            {
+              type: "output_text",
+              text: "{\"translatedText\":\"Hola\",\"alternates\":[\"Buenas\"]}",
+            },
+          ],
+        },
+      ],
+    });
+    await app.close();
+  });
+
+  it("returns an OpenAI-style error for invalid structured output", async () => {
+    const { runner } = fakeRunner("{\"translatedText\":\"Hola\"}");
+    const app = createServer({ config: testConfig(), runner });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/responses",
+      payload: {
+        model: "local-codex-test",
+        input: "Translate hello.",
+        text: {
+          format: {
+            type: "json_schema",
+            name: "translation_result",
+            strict: true,
+            schema: responseSchema,
+          },
+        },
+      },
+    });
+
+    expect(response.statusCode).toBe(500);
+    expect(response.json()).toEqual({
+      error: {
+        message: "$.alternates is required.",
+        type: "api_error",
+        param: null,
+        code: "invalid_structured_output",
+      },
+    });
+    await app.close();
+  });
+
+  it("returns 400 for unsupported Responses text formats", async () => {
+    const { runner } = fakeRunner();
+    const app = createServer({ config: testConfig(), runner });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/responses",
+      payload: {
+        model: "local-codex-test",
+        input: "Hello",
+        text: { format: { type: "grammar" } },
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({
+      error: {
+        message: "Unsupported response text format: grammar.",
+        type: "invalid_request_error",
+        param: "text.format.type",
+        code: "unsupported_response_format",
+      },
     });
     await app.close();
   });

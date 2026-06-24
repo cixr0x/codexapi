@@ -1,5 +1,10 @@
 import { randomUUID } from "node:crypto";
 
+import {
+  buildStructuredOutputInstructions,
+  getResponseTextFormat,
+} from "./structuredOutput.js";
+
 type JsonRecord = Record<string, unknown>;
 
 export type OpenAIErrorType =
@@ -104,6 +109,11 @@ export function buildResponsesPrompt(body: unknown): string {
   }
 
   lines.push(...formatResponseInput(request.input));
+  const format = getResponseTextFormat(request);
+  if (format) {
+    lines.push(buildStructuredOutputInstructions(format));
+  }
+
   return lines.join("\n");
 }
 

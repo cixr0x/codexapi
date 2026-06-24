@@ -64,6 +64,18 @@ npm start
 
 Streaming is not supported. Requests with `stream: true` return an OpenAI-style `400` error.
 
+## Structured Outputs
+
+`POST /v1/responses` supports the Responses API `text.format` field for:
+
+- `{ "type": "text" }`
+- `{ "type": "json_object" }`
+- `{ "type": "json_schema", "name": "...", "strict": true, "schema": { ... } }`
+
+Structured output is prompt-enforced because Codex CLI does not expose native constrained decoding. The service asks Codex to return only JSON, extracts the first JSON object from the output, validates it, and returns minified JSON in `output_text`.
+
+The `json_schema` validator supports a practical subset: `type`, `properties`, `required`, `items`, `additionalProperties: false`, nested objects, arrays, and primitive string/number/integer/boolean/null types.
+
 ## Examples
 
 Chat Completions:
@@ -88,6 +100,36 @@ curl http://127.0.0.1:3000/v1/responses \
     "model": "local-codex",
     "instructions": "Be concise.",
     "input": "Hello"
+  }'
+```
+
+Responses with JSON schema:
+
+```bash
+curl http://127.0.0.1:3000/v1/responses \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "local-codex",
+    "input": "Translate hello to Spanish.",
+    "text": {
+      "format": {
+        "type": "json_schema",
+        "name": "translation_result",
+        "strict": true,
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "translatedText": { "type": "string" },
+            "alternates": {
+              "type": "array",
+              "items": { "type": "string" }
+            }
+          },
+          "required": ["translatedText", "alternates"]
+        }
+      }
+    }
   }'
 ```
 

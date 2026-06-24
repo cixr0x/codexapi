@@ -16,6 +16,11 @@ import {
   createResponse,
   openAiError,
 } from "./openaiCompat.js";
+import {
+  StructuredOutputError,
+  getResponseTextFormat,
+  normalizeStructuredOutput,
+} from "./structuredOutput.js";
 
 export interface CreateServerOptions {
   config?: AppConfig;
@@ -91,7 +96,9 @@ export function createServer(options: CreateServerOptions = {}): FastifyInstance
   app.post("/v1/responses", async (request, reply) => {
     try {
       const prompt = buildResponsesPrompt(request.body);
-      const content = await runner.run(prompt);
+      const format = getResponseTextFormat(request.body);
+      const rawContent = await runner.run(prompt);
+      const content = normalizeStructuredOutput(rawContent, format);
       return createResponse({
         model: config.openAICompatModel,
         content,
@@ -117,6 +124,16 @@ function mapError(error: unknown): OpenAIHttpError {
       null,
       error.code === "TIMEOUT" ? "codex_timeout" : "codex_cli_error",
       error.code === "TIMEOUT" ? 504 : 500,
+    );
+  }
+
+  if (error instanceof StructuredOutputError) {
+    return openAiError(
+      error.message,
+      error.statusCode >= 500 ? "api_error" : "invalid_request_error",
+      error.param,
+      error.code,
+      error.statusCode,
     );
   }
 
