@@ -41,6 +41,7 @@ function testConfig() {
   return {
     host: "127.0.0.1",
     port: 3000,
+    codexBackend: "exec" as const,
     codexWorkspace: "C:/workspace",
     codexCommand: "codex",
     codexCommandArgs: [],
@@ -51,6 +52,10 @@ function testConfig() {
     codexEphemeral: true,
     codexIgnoreRules: true,
     codexTimeoutMs: 120000,
+    codexAppServerPort: 0,
+    codexAppServerStartTimeoutMs: 10000,
+    codexAppServerDisableApps: true,
+    codexAppServerDisableNodeReplMcp: true,
     openAICompatModel: "local-codex-test",
     callLoggingEnabled: false,
     callLogDir: "C:/workspace/.codexapi/logs",

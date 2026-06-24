@@ -51,6 +51,10 @@ export interface CodexRunnerConfig {
   spawn?: SpawnFn;
 }
 
+export interface CodexRunOptions {
+  outputSchema?: unknown;
+}
+
 export interface CodexCommandDetails {
   executable: string;
   args: string[];
@@ -66,7 +70,7 @@ export interface CodexRunResult {
 
 export interface CodexRunner {
   run(prompt: string): Promise<string>;
-  runWithDetails?: (prompt: string) => Promise<CodexRunResult>;
+  runWithDetails?: (prompt: string, options?: CodexRunOptions) => Promise<CodexRunResult>;
 }
 
 export function createCodexRunner(config: CodexRunnerConfig): CodexRunner {

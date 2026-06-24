@@ -1,12 +1,14 @@
 # codexapi
 
-A local OpenAI-compatible HTTP wrapper for one-shot Codex CLI prompts.
+A local OpenAI-compatible HTTP wrapper for one-shot Codex prompts.
 
-The service exposes a small non-streaming subset of the OpenAI API and runs each request through:
+By default, the service exposes a small non-streaming subset of the OpenAI API and runs each request through:
 
 ```bash
 codex exec "<prompt>" --skip-git-repo-check --ignore-user-config --disable plugins --disable shell_snapshot --ephemeral --ignore-rules
 ```
+
+For local development, it can also use an experimental warm `codex app-server` backend to avoid spawning `codex exec` for every request.
 
 ## Requirements
 
@@ -27,6 +29,7 @@ Runtime configuration is read from environment variables:
 | --- | --- | --- |
 | `HOST` | `127.0.0.1` | HTTP bind host |
 | `PORT` | `3000` | HTTP bind port |
+| `CODEX_BACKEND` | `exec` | Runner backend. Use `exec` or experimental `app-server` |
 | `CODEX_WORKSPACE` | current working directory | Fixed workspace root for every Codex run |
 | `CODEX_COMMAND` | npm Codex Node script on Windows, `codex` elsewhere | Codex executable |
 | `CODEX_COMMAND_ARGS` | npm Codex script path on Windows, empty elsewhere | Semicolon-separated fixed args inserted before `exec` |
@@ -37,6 +40,11 @@ Runtime configuration is read from environment variables:
 | `CODEX_EPHEMERAL` | `true` | Add `--ephemeral` to avoid persisting one-shot session files |
 | `CODEX_IGNORE_RULES` | `true` | Add `--ignore-rules` to skip user/project execpolicy rule loading |
 | `CODEX_TIMEOUT_MS` | `120000` | Per-request Codex timeout |
+| `CODEX_APP_SERVER_URL` | unset | Existing app-server WebSocket URL to use when `CODEX_BACKEND=app-server` |
+| `CODEX_APP_SERVER_PORT` | `0` | Managed app-server port. `0` picks a free local port |
+| `CODEX_APP_SERVER_START_TIMEOUT_MS` | `10000` | Timeout for connecting to app-server |
+| `CODEX_APP_SERVER_DISABLE_APPS` | `true` | Start managed app-server with `--disable apps` |
+| `CODEX_APP_SERVER_DISABLE_NODE_REPL_MCP` | `true` | Start managed app-server with `-c mcp_servers.node_repl.enabled=false` |
 | `OPENAI_COMPAT_MODEL` | `local-codex` | Model name returned by compatibility responses |
 | `CODEX_CALL_LOGGING` | `false` | Write every chat/responses call to JSONL when set to `true` |
 | `CODEX_CALL_LOG_DIR` | `.codexapi/logs` | Directory for `calls.jsonl` when call logging is enabled |
@@ -79,7 +87,9 @@ Streaming is not supported. Requests with `stream: true` return an OpenAI-style 
 - `{ "type": "json_object" }`
 - `{ "type": "json_schema", "name": "...", "strict": true, "schema": { ... } }`
 
-Structured output is prompt-enforced because Codex CLI does not expose native constrained decoding. The service asks Codex to return only JSON, extracts the first JSON object from the output, validates it, and returns minified JSON in `output_text`.
+With the default `exec` backend, structured output is prompt-enforced because `codex exec` does not expose native constrained decoding. The service asks Codex to return only JSON, extracts the first JSON object from the output, validates it, and returns minified JSON in `output_text`.
+
+With `CODEX_BACKEND=app-server`, the service also passes `text.format.schema` to `turn/start` as `outputSchema` when a JSON schema is supplied. The same local extraction and validation still runs before the HTTP response is returned.
 
 The `json_schema` validator supports a practical subset: `type`, `properties`, `required`, `items`, `additionalProperties: false`, nested objects, arrays, and primitive string/number/integer/boolean/null types.
 
@@ -88,6 +98,25 @@ The `json_schema` validator supports a practical subset: `type`, `properties`, `
 When `CODEX_IGNORE_USER_CONFIG=false`, `CODEX_PROFILE=plain` passes `--profile plain`, which layers `$CODEX_HOME/plain.config.toml` on top of the base Codex config. Profiles do not automatically disable plugins unless the profile or command disables the `plugins` feature.
 
 By default this API passes `--ignore-user-config`, `--disable plugins`, `--disable shell_snapshot`, `--ephemeral`, and `--ignore-rules`. This avoids user config, plugin-provided skills such as `superpowers`, shell snapshotting, session persistence, and rule loading for one-shot API calls while leaving the normal Codex CLI configuration untouched. Set the corresponding `CODEX_*` variable to `false` only if you intentionally want that Codex behavior for API calls.
+
+## Experimental App-Server Backend
+
+Set `CODEX_BACKEND=app-server` to use a warm `codex app-server` process instead of spawning `codex exec` per request.
+
+When `CODEX_APP_SERVER_URL` is unset, the API starts and reuses a managed local app-server:
+
+```bash
+codex app-server --listen ws://127.0.0.1:<port> --disable apps --disable plugins --disable shell_snapshot -c mcp_servers.node_repl.enabled=false
+```
+
+Each API request opens a WebSocket connection, creates one ephemeral thread, starts one turn, collects the final assistant message from app-server notifications, and returns it through the OpenAI-compatible response shape.
+
+Current caveats:
+
+- `codex app-server` is experimental in Codex CLI 0.142.0.
+- `--ignore-user-config` and `--ignore-rules` are `codex exec` flags, not app-server flags. The managed app-server disables apps, plugins, shell snapshot, and the configured `node_repl` MCP server by default, but it can still load instruction sources from the active Codex home.
+- A fully isolated `CODEX_HOME` prevents inherited instructions and MCP/plugin config, but it also needs a separate auth setup.
+- Call logs show the app-server command or external WebSocket URL instead of a per-request `codex exec "<prompt>"` command.
 
 ## Call Logs
 

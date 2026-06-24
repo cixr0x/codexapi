@@ -69,6 +69,7 @@ describe("config", () => {
   it("enables lightweight Codex exec flags by default for API-launched runs", () => {
     const config = loadConfig({}, "C:/repo", "linux");
 
+    expect(config.codexBackend).toBe("exec");
     expect(config.codexIgnoreUserConfig).toBe(true);
     expect(config.codexEphemeral).toBe(true);
     expect(config.codexIgnoreRules).toBe(true);
@@ -98,5 +99,33 @@ describe("config", () => {
 
     expect(config.callLoggingEnabled).toBe(false);
     expect(config.callLogDir).toBe(join("C:/repo", ".codexapi", "logs"));
+  });
+
+  it("parses the experimental app-server backend config", () => {
+    const config = loadConfig(
+      {
+        CODEX_BACKEND: "app-server",
+        CODEX_APP_SERVER_URL: "ws://127.0.0.1:3032",
+        CODEX_APP_SERVER_PORT: "4567",
+        CODEX_APP_SERVER_START_TIMEOUT_MS: "5000",
+        CODEX_APP_SERVER_DISABLE_APPS: "false",
+        CODEX_APP_SERVER_DISABLE_NODE_REPL_MCP: "false",
+      },
+      "C:/repo",
+      "linux",
+    );
+
+    expect(config.codexBackend).toBe("app-server");
+    expect(config.codexAppServerUrl).toBe("ws://127.0.0.1:3032");
+    expect(config.codexAppServerPort).toBe(4567);
+    expect(config.codexAppServerStartTimeoutMs).toBe(5000);
+    expect(config.codexAppServerDisableApps).toBe(false);
+    expect(config.codexAppServerDisableNodeReplMcp).toBe(false);
+  });
+
+  it("rejects unsupported Codex backend names", () => {
+    expect(() => loadConfig({ CODEX_BACKEND: "sidecar" }, "C:/repo", "linux")).toThrow(
+      "CODEX_BACKEND must be one of: exec, app-server.",
+    );
   });
 });

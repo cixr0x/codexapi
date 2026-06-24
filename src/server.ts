@@ -3,10 +3,12 @@ import Fastify, { type FastifyInstance, type FastifyReply } from "fastify";
 import { randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
 
+import { createAppServerCodexRunner } from "./appServerRunner.js";
 import { createCallLogger, type CallLogger, type CallLogEntry } from "./callLogger.js";
 import { type AppConfig, loadConfig } from "./config.js";
 import {
   CodexRunnerError,
+  type CodexRunOptions,
   createCodexRunner,
   type CodexRunResult,
   type CodexRunner,
@@ -21,6 +23,7 @@ import {
 } from "./openaiCompat.js";
 import {
   StructuredOutputError,
+  type ResponseTextFormat,
   getResponseTextFormat,
   normalizeStructuredOutput,
 } from "./structuredOutput.js";
@@ -33,20 +36,7 @@ export interface CreateServerOptions {
 
 export function createServer(options: CreateServerOptions = {}): FastifyInstance {
   const config = options.config ?? loadConfig();
-  const runner =
-    options.runner ??
-    createCodexRunner({
-      command: config.codexCommand,
-      commandArgs: config.codexCommandArgs,
-      workspace: config.codexWorkspace,
-      profile: config.codexProfile,
-      ignoreUserConfig: config.codexIgnoreUserConfig,
-      disablePlugins: config.codexDisablePlugins,
-      disableShellSnapshot: config.codexDisableShellSnapshot,
-      ephemeral: config.codexEphemeral,
-      ignoreRules: config.codexIgnoreRules,
-      timeoutMs: config.codexTimeoutMs,
-    });
+  const runner = options.runner ?? createConfiguredCodexRunner(config);
   const callLogger = createCallLogger({
     enabled: config.callLoggingEnabled,
     logDir: config.callLogDir,
@@ -150,7 +140,9 @@ export function createServer(options: CreateServerOptions = {}): FastifyInstance
     try {
       prompt = buildResponsesPrompt(request.body);
       const format = getResponseTextFormat(request.body);
-      runResult = await runPromptWithDetails(runner, prompt);
+      runResult = await runPromptWithDetails(runner, prompt, {
+        outputSchema: outputSchemaForFormat(format),
+      });
       outputText = normalizeStructuredOutput(runResult.stdout, format);
       const responseBody = createResponse({
         model: config.openAICompatModel,
@@ -244,15 +236,63 @@ function sendOpenAIError(reply: FastifyReply, error: OpenAIHttpError): void {
 async function runPromptWithDetails(
   runner: CodexRunner,
   prompt: string,
+  options: CodexRunOptions = {},
 ): Promise<CodexRunResult> {
   if (runner.runWithDetails) {
-    return runner.runWithDetails(prompt);
+    if (options.outputSchema === undefined) {
+      return runner.runWithDetails(prompt);
+    }
+
+    return runner.runWithDetails(prompt, options);
   }
 
   return {
     stdout: await runner.run(prompt),
     stderr: "",
   };
+}
+
+function createConfiguredCodexRunner(config: AppConfig): CodexRunner {
+  if (config.codexBackend === "app-server") {
+    return createAppServerCodexRunner({
+      command: config.codexCommand,
+      commandArgs: config.codexCommandArgs,
+      workspace: config.codexWorkspace,
+      timeoutMs: config.codexTimeoutMs,
+      appServerUrl: config.codexAppServerUrl,
+      managedPort: config.codexAppServerPort,
+      startTimeoutMs: config.codexAppServerStartTimeoutMs,
+      disableApps: config.codexAppServerDisableApps,
+      disablePlugins: config.codexDisablePlugins,
+      disableShellSnapshot: config.codexDisableShellSnapshot,
+      disableNodeReplMcp: config.codexAppServerDisableNodeReplMcp,
+    });
+  }
+
+  return createCodexRunner({
+    command: config.codexCommand,
+    commandArgs: config.codexCommandArgs,
+    workspace: config.codexWorkspace,
+    profile: config.codexProfile,
+    ignoreUserConfig: config.codexIgnoreUserConfig,
+    disablePlugins: config.codexDisablePlugins,
+    disableShellSnapshot: config.codexDisableShellSnapshot,
+    ephemeral: config.codexEphemeral,
+    ignoreRules: config.codexIgnoreRules,
+    timeoutMs: config.codexTimeoutMs,
+  });
+}
+
+function outputSchemaForFormat(format: ResponseTextFormat | null): unknown {
+  if (format?.type === "json_schema") {
+    return format.schema;
+  }
+
+  if (format?.type === "json_object") {
+    return { type: "object" };
+  }
+
+  return undefined;
 }
 
 async function logCall(

@@ -1,8 +1,11 @@
 import { join } from "node:path";
 
+export type CodexBackend = "exec" | "app-server";
+
 export interface AppConfig {
   host: string;
   port: number;
+  codexBackend: CodexBackend;
   codexWorkspace: string;
   codexCommand: string;
   codexCommandArgs: string[];
@@ -13,6 +16,11 @@ export interface AppConfig {
   codexEphemeral: boolean;
   codexIgnoreRules: boolean;
   codexTimeoutMs: number;
+  codexAppServerUrl?: string;
+  codexAppServerPort: number;
+  codexAppServerStartTimeoutMs: number;
+  codexAppServerDisableApps: boolean;
+  codexAppServerDisableNodeReplMcp: boolean;
   openAICompatModel: string;
   callLoggingEnabled: boolean;
   callLogDir: string;
@@ -33,6 +41,7 @@ export function loadConfig(
   return {
     host: env.HOST ?? "127.0.0.1",
     port: parseInteger(env.PORT, 3000, "PORT"),
+    codexBackend: parseCodexBackend(env.CODEX_BACKEND),
     codexWorkspace: env.CODEX_WORKSPACE ?? cwd,
     codexCommand: env.CODEX_COMMAND ?? defaultCommand.command,
     codexCommandArgs: env.CODEX_COMMAND_ARGS
@@ -45,6 +54,23 @@ export function loadConfig(
     codexEphemeral: parseBoolean(env.CODEX_EPHEMERAL, true),
     codexIgnoreRules: parseBoolean(env.CODEX_IGNORE_RULES, true),
     codexTimeoutMs: parseInteger(env.CODEX_TIMEOUT_MS, 120000, "CODEX_TIMEOUT_MS"),
+    codexAppServerUrl: env.CODEX_APP_SERVER_URL?.trim() || undefined,
+    codexAppServerPort: parseInteger(
+      env.CODEX_APP_SERVER_PORT,
+      0,
+      "CODEX_APP_SERVER_PORT",
+      { allowZero: true },
+    ),
+    codexAppServerStartTimeoutMs: parseInteger(
+      env.CODEX_APP_SERVER_START_TIMEOUT_MS,
+      10000,
+      "CODEX_APP_SERVER_START_TIMEOUT_MS",
+    ),
+    codexAppServerDisableApps: parseBoolean(env.CODEX_APP_SERVER_DISABLE_APPS, true),
+    codexAppServerDisableNodeReplMcp: parseBoolean(
+      env.CODEX_APP_SERVER_DISABLE_NODE_REPL_MCP,
+      true,
+    ),
     openAICompatModel: env.OPENAI_COMPAT_MODEL ?? "local-codex",
     callLoggingEnabled: parseBoolean(env.CODEX_CALL_LOGGING, false),
     callLogDir: env.CODEX_CALL_LOG_DIR ?? join(cwd, ".codexapi", "logs"),
@@ -84,14 +110,20 @@ function parseInteger(
   value: string | undefined,
   fallback: number,
   name: string,
+  options: { allowZero?: boolean } = {},
 ): number {
   if (value == null || value === "") {
     return fallback;
   }
 
   const parsed = Number.parseInt(value, 10);
-  if (!Number.isFinite(parsed) || parsed <= 0) {
-    throw new Error(`${name} must be a positive integer.`);
+  const tooSmall = options.allowZero ? parsed < 0 : parsed <= 0;
+  if (!Number.isFinite(parsed) || tooSmall) {
+    throw new Error(
+      options.allowZero
+        ? `${name} must be a non-negative integer.`
+        : `${name} must be a positive integer.`,
+    );
   }
 
   return parsed;
@@ -110,4 +142,16 @@ function parseBoolean(value: string | undefined, fallback: boolean): boolean {
   }
 
   return ["1", "true", "yes", "on"].includes(value.toLowerCase());
+}
+
+function parseCodexBackend(value: string | undefined): CodexBackend {
+  if (value == null || value === "") {
+    return "exec";
+  }
+
+  if (value === "exec" || value === "app-server") {
+    return value;
+  }
+
+  throw new Error("CODEX_BACKEND must be one of: exec, app-server.");
 }
