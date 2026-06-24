@@ -1,11 +1,14 @@
 import cors from "@fastify/cors";
 import Fastify, { type FastifyInstance, type FastifyReply } from "fastify";
+import { randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
 
+import { createCallLogger, type CallLogger, type CallLogEntry } from "./callLogger.js";
 import { type AppConfig, loadConfig } from "./config.js";
 import {
   CodexRunnerError,
   createCodexRunner,
+  type CodexRunResult,
   type CodexRunner,
 } from "./codexRunner.js";
 import {
@@ -39,6 +42,10 @@ export function createServer(options: CreateServerOptions = {}): FastifyInstance
       profile: config.codexProfile,
       timeoutMs: config.codexTimeoutMs,
     });
+  const callLogger = createCallLogger({
+    enabled: config.callLoggingEnabled,
+    logDir: config.callLogDir,
+  });
 
   const app = Fastify({ logger: options.logger ?? false });
 
@@ -80,31 +87,99 @@ export function createServer(options: CreateServerOptions = {}): FastifyInstance
   }));
 
   app.post("/v1/chat/completions", async (request, reply) => {
+    const startedAt = Date.now();
+    const callId = createCallId();
+    let prompt: string | undefined;
+    let runResult: CodexRunResult | undefined;
+
     try {
-      const prompt = buildChatPrompt(request.body);
-      const content = await runner.run(prompt);
-      return createChatCompletion({
+      prompt = buildChatPrompt(request.body);
+      runResult = await runPromptWithDetails(runner, prompt);
+      const responseBody = createChatCompletion({
         model: config.openAICompatModel,
-        content,
+        content: runResult.stdout,
       });
+      await logCall(callLogger, {
+        id: callId,
+        startedAt,
+        endpoint: "/v1/chat/completions",
+        method: request.method,
+        requestBody: request.body,
+        model: config.openAICompatModel,
+        prompt,
+        rawStdout: runResult.stdout,
+        rawStderr: runResult.stderr,
+        outputText: runResult.stdout,
+        statusCode: 200,
+      });
+      return responseBody;
     } catch (error) {
-      sendOpenAIError(reply, mapError(error));
+      const mappedError = mapError(error);
+      await logCall(callLogger, {
+        id: callId,
+        startedAt,
+        endpoint: "/v1/chat/completions",
+        method: request.method,
+        requestBody: request.body,
+        model: config.openAICompatModel,
+        prompt,
+        rawStdout: runResult?.stdout,
+        rawStderr: runResult?.stderr ?? runnerErrorStderr(error),
+        statusCode: mappedError.statusCode,
+        error: mappedError.body.error,
+      });
+      sendOpenAIError(reply, mappedError);
       return undefined;
     }
   });
 
   app.post("/v1/responses", async (request, reply) => {
+    const startedAt = Date.now();
+    const callId = createCallId();
+    let prompt: string | undefined;
+    let runResult: CodexRunResult | undefined;
+    let outputText: string | undefined;
+
     try {
-      const prompt = buildResponsesPrompt(request.body);
+      prompt = buildResponsesPrompt(request.body);
       const format = getResponseTextFormat(request.body);
-      const rawContent = await runner.run(prompt);
-      const content = normalizeStructuredOutput(rawContent, format);
-      return createResponse({
+      runResult = await runPromptWithDetails(runner, prompt);
+      outputText = normalizeStructuredOutput(runResult.stdout, format);
+      const responseBody = createResponse({
         model: config.openAICompatModel,
-        content,
+        content: outputText,
       });
+      await logCall(callLogger, {
+        id: callId,
+        startedAt,
+        endpoint: "/v1/responses",
+        method: request.method,
+        requestBody: request.body,
+        model: config.openAICompatModel,
+        prompt,
+        rawStdout: runResult.stdout,
+        rawStderr: runResult.stderr,
+        outputText,
+        statusCode: 200,
+      });
+      return responseBody;
     } catch (error) {
-      sendOpenAIError(reply, mapError(error));
+      const mappedError = mapError(error);
+      await logCall(callLogger, {
+        id: callId,
+        startedAt,
+        endpoint: "/v1/responses",
+        method: request.method,
+        requestBody: request.body,
+        model: config.openAICompatModel,
+        prompt,
+        rawStdout: runResult?.stdout,
+        rawStderr: runResult?.stderr ?? runnerErrorStderr(error),
+        outputText,
+        statusCode: mappedError.statusCode,
+        error: mappedError.body.error,
+      });
+      sendOpenAIError(reply, mappedError);
       return undefined;
     }
   });
@@ -155,6 +230,46 @@ function codexErrorMessage(error: CodexRunnerError): string {
 
 function sendOpenAIError(reply: FastifyReply, error: OpenAIHttpError): void {
   reply.status(error.statusCode).send(error.body);
+}
+
+async function runPromptWithDetails(
+  runner: CodexRunner,
+  prompt: string,
+): Promise<CodexRunResult> {
+  if (runner.runWithDetails) {
+    return runner.runWithDetails(prompt);
+  }
+
+  return {
+    stdout: await runner.run(prompt),
+    stderr: "",
+  };
+}
+
+async function logCall(
+  logger: CallLogger,
+  {
+    startedAt,
+    ...entry
+  }: Omit<CallLogEntry, "timestamp" | "durationMs"> & { startedAt: number },
+): Promise<void> {
+  try {
+    await logger.log({
+      ...entry,
+      timestamp: new Date(startedAt).toISOString(),
+      durationMs: Date.now() - startedAt,
+    });
+  } catch {
+    // Call logging must never change API behavior.
+  }
+}
+
+function runnerErrorStderr(error: unknown): string | undefined {
+  return error instanceof CodexRunnerError ? error.stderr : undefined;
+}
+
+function createCallId(): string {
+  return `call_${randomUUID().replaceAll("-", "")}`;
 }
 
 function hasStatusCode(error: unknown): error is { statusCode: number } {

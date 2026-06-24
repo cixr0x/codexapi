@@ -33,6 +33,8 @@ Runtime configuration is read from environment variables:
 | `CODEX_PROFILE` | `plain` | Codex CLI profile |
 | `CODEX_TIMEOUT_MS` | `120000` | Per-request Codex timeout |
 | `OPENAI_COMPAT_MODEL` | `local-codex` | Model name returned by compatibility responses |
+| `CODEX_CALL_LOGGING` | `false` | Write every chat/responses call to JSONL when set to `true` |
+| `CODEX_CALL_LOG_DIR` | `.codexapi/logs` | Directory for `calls.jsonl` when call logging is enabled |
 
 Example PowerShell setup:
 
@@ -75,6 +77,12 @@ Streaming is not supported. Requests with `stream: true` return an OpenAI-style 
 Structured output is prompt-enforced because Codex CLI does not expose native constrained decoding. The service asks Codex to return only JSON, extracts the first JSON object from the output, validates it, and returns minified JSON in `output_text`.
 
 The `json_schema` validator supports a practical subset: `type`, `properties`, `required`, `items`, `additionalProperties: false`, nested objects, arrays, and primitive string/number/integer/boolean/null types.
+
+## Call Logs
+
+Set `CODEX_CALL_LOGGING=true` to write every `/v1/chat/completions` and `/v1/responses` call to `calls.jsonl` under `CODEX_CALL_LOG_DIR`.
+
+Each log entry includes the request body, generated Codex prompt, raw Codex stdout, raw Codex stderr, normalized output text, duration, status code, and error details when present. This can include sensitive prompt and response data, so keep it disabled outside local debugging.
 
 ## Examples
 

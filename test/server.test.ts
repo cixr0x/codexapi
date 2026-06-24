@@ -1,4 +1,8 @@
-import { describe, expect, it, vi } from "vitest";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { CodexRunnerError, type CodexRunner } from "../src/codexRunner.js";
 import { createServer, isMainModule } from "../src/server.js";
@@ -18,6 +22,12 @@ function fakeRunner(output = "Codex output") {
   return { runner: { run }, run };
 }
 
+function fakeDetailedRunner(stdout = "Codex output", stderr = "skill loaded") {
+  const run = vi.fn<CodexRunner["run"]>(async () => stdout);
+  const runWithDetails = vi.fn(async () => ({ stdout, stderr }));
+  return { runner: { run, runWithDetails }, run, runWithDetails };
+}
+
 function testConfig() {
   return {
     host: "127.0.0.1",
@@ -28,7 +38,24 @@ function testConfig() {
     codexProfile: "plain",
     codexTimeoutMs: 120000,
     openAICompatModel: "local-codex-test",
+    callLoggingEnabled: false,
+    callLogDir: "C:/workspace/.codexapi/logs",
   };
+}
+
+let tempDirs: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(
+    tempDirs.map((dir) => rm(dir, { recursive: true, force: true })),
+  );
+  tempDirs = [];
+});
+
+async function tempDir(): Promise<string> {
+  const dir = await mkdtemp(join(tmpdir(), "codexapi-server-logs-"));
+  tempDirs.push(dir);
+  return dir;
 }
 
 describe("Fastify server", () => {
@@ -123,6 +150,48 @@ describe("Fastify server", () => {
       status: "completed",
       output_text: "Response from Codex",
     });
+    await app.close();
+  });
+
+  it("logs response calls when API-level logging is enabled", async () => {
+    const logDir = await tempDir();
+    const { runner, runWithDetails } = fakeDetailedRunner("Response from Codex", "skill log");
+    const app = createServer({
+      config: {
+        ...testConfig(),
+        callLoggingEnabled: true,
+        callLogDir: logDir,
+      },
+      runner,
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/responses",
+      payload: {
+        model: "local-codex-test",
+        input: "Hello",
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(runWithDetails).toHaveBeenCalledWith("input: Hello");
+
+    const logContent = await readFile(join(logDir, "calls.jsonl"), "utf8");
+    const entry = JSON.parse(logContent);
+    expect(entry).toMatchObject({
+      endpoint: "/v1/responses",
+      method: "POST",
+      model: "local-codex-test",
+      requestBody: { model: "local-codex-test", input: "Hello" },
+      prompt: "input: Hello",
+      rawStdout: "Response from Codex",
+      rawStderr: "skill log",
+      outputText: "Response from Codex",
+      statusCode: 200,
+    });
+    expect(entry.id).toMatch(/^call_/);
+    expect(typeof entry.durationMs).toBe("number");
     await app.close();
   });
 

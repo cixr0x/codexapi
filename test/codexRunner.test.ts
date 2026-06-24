@@ -64,6 +64,30 @@ describe("Codex runner", () => {
     );
   });
 
+  it("returns stdout and stderr from detailed runs", async () => {
+    const child = new FakeChildProcess();
+    const spawn = createFakeSpawn(child);
+    const runner = createCodexRunner({
+      command: "codex",
+      commandArgs: [],
+      workspace: "C:/workspace",
+      profile: "plain",
+      timeoutMs: 1000,
+      spawn,
+    });
+
+    expect(runner.runWithDetails).toBeDefined();
+    const resultPromise = runner.runWithDetails!("Hello");
+    child.stdout.push("OK\n");
+    child.stderr.push("skill loader warning\n");
+    child.close(0);
+
+    await expect(resultPromise).resolves.toEqual({
+      stdout: "OK",
+      stderr: "skill loader warning",
+    });
+  });
+
   it("rejects with a typed error when codex exits non-zero", async () => {
     const child = new FakeChildProcess();
     const spawn = createFakeSpawn(child);

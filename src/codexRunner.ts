@@ -42,14 +42,24 @@ export interface CodexRunnerConfig {
   spawn?: SpawnFn;
 }
 
+export interface CodexRunResult {
+  stdout: string;
+  stderr: string;
+}
+
 export interface CodexRunner {
   run(prompt: string): Promise<string>;
+  runWithDetails?: (prompt: string) => Promise<CodexRunResult>;
 }
 
 export function createCodexRunner(config: CodexRunnerConfig): CodexRunner {
   return {
-    run(prompt: string) {
-      return runCodexPrompt(prompt, config);
+    async run(prompt: string) {
+      const result = await runCodexPromptWithDetails(prompt, config);
+      return result.stdout;
+    },
+    runWithDetails(prompt: string) {
+      return runCodexPromptWithDetails(prompt, config);
     },
   };
 }
@@ -66,6 +76,29 @@ export function runCodexPrompt(
     spawn = nodeSpawn,
   }: CodexRunnerConfig,
 ): Promise<string> {
+  return runCodexPromptWithDetails(prompt, {
+    command,
+    commandArgs,
+    workspace,
+    profile,
+    timeoutMs,
+    maxOutputBytes,
+    spawn,
+  }).then((result) => result.stdout);
+}
+
+export function runCodexPromptWithDetails(
+  prompt: string,
+  {
+    command,
+    commandArgs = [],
+    workspace,
+    profile,
+    timeoutMs,
+    maxOutputBytes = 1024 * 1024,
+    spawn = nodeSpawn,
+  }: CodexRunnerConfig,
+): Promise<CodexRunResult> {
   const args = [
     ...commandArgs,
     "exec",
@@ -123,7 +156,10 @@ export function runCodexPrompt(
     child.on("close", (code: number | null) => {
       settle(() => {
         if (code === 0) {
-          resolve(stdout.trimEnd());
+          resolve({
+            stdout: stdout.trimEnd(),
+            stderr: stderr.trimEnd(),
+          });
           return;
         }
 

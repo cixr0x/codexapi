@@ -9,6 +9,8 @@ export interface AppConfig {
   codexProfile: string;
   codexTimeoutMs: number;
   openAICompatModel: string;
+  callLoggingEnabled: boolean;
+  callLogDir: string;
 }
 
 export interface CodexCommandDefault {
@@ -34,6 +36,8 @@ export function loadConfig(
     codexProfile: env.CODEX_PROFILE ?? "plain",
     codexTimeoutMs: parseInteger(env.CODEX_TIMEOUT_MS, 120000, "CODEX_TIMEOUT_MS"),
     openAICompatModel: env.OPENAI_COMPAT_MODEL ?? "local-codex",
+    callLoggingEnabled: parseBoolean(env.CODEX_CALL_LOGGING, false),
+    callLogDir: env.CODEX_CALL_LOG_DIR ?? join(cwd, ".codexapi", "logs"),
   };
 }
 
@@ -88,4 +92,12 @@ function parseCommandArgs(value: string): string[] {
     .split(";")
     .map((part) => part.trim())
     .filter(Boolean);
+}
+
+function parseBoolean(value: string | undefined, fallback: boolean): boolean {
+  if (value == null || value === "") {
+    return fallback;
+  }
+
+  return ["1", "true", "yes", "on"].includes(value.toLowerCase());
 }

@@ -6,3 +6,4 @@ dist/
 coverage/
 .vitest/
 npm-debug.log*
+.codexapi/

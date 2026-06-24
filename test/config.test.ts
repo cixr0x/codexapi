@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { join } from "node:path";
 
 import { defaultCodexCommand, loadConfig } from "../src/config.js";
 
@@ -37,5 +38,26 @@ describe("config", () => {
       "C:\\codex\\codex.js",
       "--experimental-flag",
     ]);
+  });
+
+  it("parses API-level call logging config", () => {
+    const config = loadConfig(
+      {
+        CODEX_CALL_LOGGING: "true",
+        CODEX_CALL_LOG_DIR: "C:\\logs\\codexapi",
+      },
+      "C:/repo",
+      "win32",
+    );
+
+    expect(config.callLoggingEnabled).toBe(true);
+    expect(config.callLogDir).toBe("C:\\logs\\codexapi");
+  });
+
+  it("disables call logging by default", () => {
+    const config = loadConfig({}, "C:/repo", "linux");
+
+    expect(config.callLoggingEnabled).toBe(false);
+    expect(config.callLogDir).toBe(join("C:/repo", ".codexapi", "logs"));
   });
 });
