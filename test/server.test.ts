@@ -45,6 +45,7 @@ function testConfig() {
     codexCommand: "codex",
     codexCommandArgs: [],
     codexProfile: "plain",
+    codexDisablePlugins: true,
     codexTimeoutMs: 120000,
     openAICompatModel: "local-codex-test",
     callLoggingEnabled: false,

@@ -54,6 +54,18 @@ describe("config", () => {
     expect(config.callLogDir).toBe("C:\\logs\\codexapi");
   });
 
+  it("disables Codex plugins by default for API-launched runs", () => {
+    const config = loadConfig({}, "C:/repo", "linux");
+
+    expect(config.codexDisablePlugins).toBe(true);
+  });
+
+  it("allows Codex plugin loading to be explicitly re-enabled", () => {
+    const config = loadConfig({ CODEX_DISABLE_PLUGINS: "false" }, "C:/repo", "linux");
+
+    expect(config.codexDisablePlugins).toBe(false);
+  });
+
   it("disables call logging by default", () => {
     const config = loadConfig({}, "C:/repo", "linux");
 

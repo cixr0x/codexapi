@@ -41,6 +41,7 @@ export interface CodexRunnerConfig {
   commandArgs?: string[];
   workspace: string;
   profile: string;
+  disablePlugins?: boolean;
   timeoutMs: number;
   maxOutputBytes?: number;
   spawn?: SpawnFn;
@@ -83,6 +84,7 @@ export function runCodexPrompt(
     commandArgs = [],
     workspace,
     profile,
+    disablePlugins,
     timeoutMs,
     maxOutputBytes = 1024 * 1024,
     spawn = nodeSpawn,
@@ -93,6 +95,7 @@ export function runCodexPrompt(
     commandArgs,
     workspace,
     profile,
+    disablePlugins,
     timeoutMs,
     maxOutputBytes,
     spawn,
@@ -106,6 +109,7 @@ export function runCodexPromptWithDetails(
     commandArgs = [],
     workspace,
     profile,
+    disablePlugins = false,
     timeoutMs,
     maxOutputBytes = 1024 * 1024,
     spawn = nodeSpawn,
@@ -118,6 +122,7 @@ export function runCodexPromptWithDetails(
     "--skip-git-repo-check",
     "--profile",
     profile,
+    ...(disablePlugins ? ["--disable", "plugins"] : []),
   ];
   const commandDetails: CodexCommandDetails = {
     executable: command,

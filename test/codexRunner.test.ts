@@ -44,6 +44,7 @@ describe("Codex runner", () => {
       commandArgs: [],
       workspace: "C:/workspace",
       profile: "plain",
+      disablePlugins: true,
       timeoutMs: 1000,
       spawn,
     });
@@ -55,7 +56,15 @@ describe("Codex runner", () => {
     await expect(resultPromise).resolves.toBe("Hi");
     expect(spawn).toHaveBeenCalledWith(
       "codex",
-      ["exec", "Hello", "--skip-git-repo-check", "--profile", "plain"],
+      [
+        "exec",
+        "Hello",
+        "--skip-git-repo-check",
+        "--profile",
+        "plain",
+        "--disable",
+        "plugins",
+      ],
       expect.objectContaining({
         cwd: "C:/workspace",
         shell: false,
@@ -72,6 +81,7 @@ describe("Codex runner", () => {
       commandArgs: [],
       workspace: "C:/workspace",
       profile: "plain",
+      disablePlugins: true,
       timeoutMs: 1000,
       spawn,
     });
@@ -87,7 +97,15 @@ describe("Codex runner", () => {
       stderr: "skill loader warning",
       command: {
         executable: "codex",
-        args: ["exec", "Hello", "--skip-git-repo-check", "--profile", "plain"],
+        args: [
+          "exec",
+          "Hello",
+          "--skip-git-repo-check",
+          "--profile",
+          "plain",
+          "--disable",
+          "plugins",
+        ],
         cwd: "C:/workspace",
         shell: false,
       },
