@@ -29,6 +29,7 @@ export function createServer(options: CreateServerOptions = {}): FastifyInstance
     options.runner ??
     createCodexRunner({
       command: config.codexCommand,
+      commandArgs: config.codexCommandArgs,
       workspace: config.codexWorkspace,
       profile: config.codexProfile,
       timeoutMs: config.codexTimeoutMs,

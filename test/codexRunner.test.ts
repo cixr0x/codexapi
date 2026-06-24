@@ -41,6 +41,7 @@ describe("Codex runner", () => {
     const spawn = createFakeSpawn(child);
     const runner = createCodexRunner({
       command: "codex",
+      commandArgs: [],
       workspace: "C:/workspace",
       profile: "plain",
       timeoutMs: 1000,
@@ -68,6 +69,7 @@ describe("Codex runner", () => {
     const spawn = createFakeSpawn(child);
     const runner = createCodexRunner({
       command: "codex",
+      commandArgs: ["C:/codex/codex.js"],
       workspace: "C:/workspace",
       profile: "plain",
       timeoutMs: 1000,
@@ -84,6 +86,18 @@ describe("Codex runner", () => {
       exitCode: 2,
       stderr: "Something failed",
     });
+    expect(spawn).toHaveBeenCalledWith(
+      "codex",
+      [
+        "C:/codex/codex.js",
+        "exec",
+        "Hello",
+        "--skip-git-repo-check",
+        "--profile",
+        "plain",
+      ],
+      expect.any(Object),
+    );
   });
 
   it("rejects with a typed error when the command cannot be started", async () => {
@@ -91,6 +105,7 @@ describe("Codex runner", () => {
     const spawn = createFakeSpawn(child);
     const runner = createCodexRunner({
       command: "missing-codex",
+      commandArgs: [],
       workspace: "C:/workspace",
       profile: "plain",
       timeoutMs: 1000,
@@ -112,6 +127,7 @@ describe("Codex runner", () => {
     const spawn = createFakeSpawn(child);
     const runner = createCodexRunner({
       command: "codex",
+      commandArgs: [],
       workspace: "C:/workspace",
       profile: "plain",
       timeoutMs: 50,

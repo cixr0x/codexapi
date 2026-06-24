@@ -14,6 +14,7 @@ function testConfig() {
     port: 3000,
     codexWorkspace: "C:/workspace",
     codexCommand: "codex",
+    codexCommandArgs: [],
     codexProfile: "plain",
     codexTimeoutMs: 120000,
     openAICompatModel: "local-codex-test",

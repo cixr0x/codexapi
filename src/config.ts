@@ -1,11 +1,19 @@
+import { join } from "node:path";
+
 export interface AppConfig {
   host: string;
   port: number;
   codexWorkspace: string;
   codexCommand: string;
+  codexCommandArgs: string[];
   codexProfile: string;
   codexTimeoutMs: number;
   openAICompatModel: string;
+}
+
+export interface CodexCommandDefault {
+  command: string;
+  args: string[];
 }
 
 export function loadConfig(
@@ -13,19 +21,49 @@ export function loadConfig(
   cwd = process.cwd(),
   platform = process.platform,
 ): AppConfig {
+  const defaultCommand = defaultCodexCommand(platform, env, process.execPath);
+
   return {
     host: env.HOST ?? "127.0.0.1",
     port: parseInteger(env.PORT, 3000, "PORT"),
     codexWorkspace: env.CODEX_WORKSPACE ?? cwd,
-    codexCommand: env.CODEX_COMMAND ?? defaultCodexCommand(platform),
+    codexCommand: env.CODEX_COMMAND ?? defaultCommand.command,
+    codexCommandArgs: env.CODEX_COMMAND_ARGS
+      ? parseCommandArgs(env.CODEX_COMMAND_ARGS)
+      : defaultCommand.args,
     codexProfile: env.CODEX_PROFILE ?? "plain",
     codexTimeoutMs: parseInteger(env.CODEX_TIMEOUT_MS, 120000, "CODEX_TIMEOUT_MS"),
     openAICompatModel: env.OPENAI_COMPAT_MODEL ?? "local-codex",
   };
 }
 
-export function defaultCodexCommand(platform: NodeJS.Platform | string): string {
-  return platform === "win32" ? "codex.exe" : "codex";
+export function defaultCodexCommand(
+  platform: NodeJS.Platform | string,
+  env: { APPDATA?: string } = process.env,
+  nodeExecPath = process.execPath,
+): CodexCommandDefault {
+  if (platform !== "win32") {
+    return { command: "codex", args: [] };
+  }
+
+  if (env.APPDATA) {
+    return {
+      command: nodeExecPath,
+      args: [
+        join(
+          env.APPDATA,
+          "npm",
+          "node_modules",
+          "@openai",
+          "codex",
+          "bin",
+          "codex.js",
+        ),
+      ],
+    };
+  }
+
+  return { command: "codex", args: [] };
 }
 
 function parseInteger(
@@ -43,4 +81,11 @@ function parseInteger(
   }
 
   return parsed;
+}
+
+function parseCommandArgs(value: string): string[] {
+  return value
+    .split(";")
+    .map((part) => part.trim())
+    .filter(Boolean);
 }

@@ -34,6 +34,7 @@ export type SpawnFn = (
 
 export interface CodexRunnerConfig {
   command: string;
+  commandArgs?: string[];
   workspace: string;
   profile: string;
   timeoutMs: number;
@@ -57,6 +58,7 @@ export function runCodexPrompt(
   prompt: string,
   {
     command,
+    commandArgs = [],
     workspace,
     profile,
     timeoutMs,
@@ -64,7 +66,14 @@ export function runCodexPrompt(
     spawn = nodeSpawn,
   }: CodexRunnerConfig,
 ): Promise<string> {
-  const args = ["exec", prompt, "--skip-git-repo-check", "--profile", profile];
+  const args = [
+    ...commandArgs,
+    "exec",
+    prompt,
+    "--skip-git-repo-check",
+    "--profile",
+    profile,
+  ];
 
   return new Promise((resolve, reject) => {
     let stdout = "";
