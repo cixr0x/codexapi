@@ -43,14 +43,13 @@ export function createServer(options: CreateServerOptions = {}): FastifyInstance
       return;
     }
 
-    const statusCode = "statusCode" in error && typeof error.statusCode === "number"
-      ? error.statusCode
-      : 500;
+    const statusCode = hasStatusCode(error) ? error.statusCode : 500;
+    const message = error instanceof Error ? error.message : "Unexpected server error.";
 
     sendOpenAIError(
       reply,
       openAiError(
-        error.message || "Unexpected server error.",
+        message || "Unexpected server error.",
         statusCode >= 500 ? "server_error" : "invalid_request_error",
         null,
         statusCode >= 500 ? "internal_error" : "bad_request",
@@ -137,6 +136,15 @@ function codexErrorMessage(error: CodexRunnerError): string {
 
 function sendOpenAIError(reply: FastifyReply, error: OpenAIHttpError): void {
   reply.status(error.statusCode).send(error.body);
+}
+
+function hasStatusCode(error: unknown): error is { statusCode: number } {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "statusCode" in error &&
+    typeof error.statusCode === "number"
+  );
 }
 
 async function main(): Promise<void> {
