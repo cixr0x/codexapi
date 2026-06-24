@@ -28,7 +28,7 @@ Runtime configuration is read from environment variables:
 | `HOST` | `127.0.0.1` | HTTP bind host |
 | `PORT` | `3000` | HTTP bind port |
 | `CODEX_WORKSPACE` | current working directory | Fixed workspace root for every Codex run |
-| `CODEX_COMMAND` | `codex` | Codex executable |
+| `CODEX_COMMAND` | `codex.exe` on Windows, `codex` elsewhere | Codex executable |
 | `CODEX_PROFILE` | `plain` | Codex CLI profile |
 | `CODEX_TIMEOUT_MS` | `120000` | Per-request Codex timeout |
 | `OPENAI_COMPAT_MODEL` | `local-codex` | Model name returned by compatibility responses |
@@ -97,4 +97,3 @@ npm test
 npm run typecheck
 npm run build
 ```
-
