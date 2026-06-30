@@ -5,7 +5,7 @@ A local OpenAI-compatible HTTP wrapper for one-shot Codex prompts.
 By default, the service exposes a small non-streaming subset of the OpenAI API and runs each request through:
 
 ```bash
-codex exec "<prompt>" --model <request.model> -c model_reasoning_effort="medium" --skip-git-repo-check --ignore-user-config --disable plugins --disable shell_snapshot --ephemeral --ignore-rules
+codex exec "<prompt>" --skip-git-repo-check --sandbox danger-full-access --dangerously-bypass-approvals-and-sandbox --model <request.model> -c model_reasoning_effort="medium" --ignore-user-config --disable plugins --disable shell_snapshot --ephemeral --ignore-rules
 ```
 
 For local development, it can also use an experimental warm `codex app-server` backend to avoid spawning `codex exec` for every request.
@@ -28,7 +28,7 @@ Runtime configuration is read from environment variables:
 | Variable | Default | Description |
 | --- | --- | --- |
 | `HOST` | `127.0.0.1` | HTTP bind host |
-| `PORT` | `3000` | HTTP bind port |
+| `PORT` | `3001` | HTTP bind port |
 | `CODEX_BACKEND` | `exec` | Runner backend. Use `exec` or experimental `app-server` |
 | `CODEX_WORKSPACE` | current working directory | Fixed workspace root for every Codex run |
 | `CODEX_COMMAND` | npm Codex Node script on Windows, `codex` elsewhere | Codex executable |
@@ -136,7 +136,7 @@ Each log entry includes the request body, generated Codex prompt, Codex command 
 Chat Completions:
 
 ```bash
-curl http://127.0.0.1:3000/v1/chat/completions \
+curl http://127.0.0.1:3001/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "gpt-5.4-mini",
@@ -149,7 +149,7 @@ curl http://127.0.0.1:3000/v1/chat/completions \
 Responses:
 
 ```bash
-curl http://127.0.0.1:3000/v1/responses \
+curl http://127.0.0.1:3001/v1/responses \
   -H "Content-Type: application/json" \
   -d '{
     "model": "gpt-5.4-mini",
@@ -161,7 +161,7 @@ curl http://127.0.0.1:3000/v1/responses \
 Responses with JSON schema:
 
 ```bash
-curl http://127.0.0.1:3000/v1/responses \
+curl http://127.0.0.1:3001/v1/responses \
   -H "Content-Type: application/json" \
   -d '{
     "model": "gpt-5.4-mini",

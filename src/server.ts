@@ -27,6 +27,7 @@ import {
   getResponseTextFormat,
   normalizeStructuredOutput,
 } from "./structuredOutput.js";
+import { webUiHtml } from "./webUi.js";
 
 export interface CreateServerOptions {
   config?: AppConfig;
@@ -68,6 +69,10 @@ export function createServer(options: CreateServerOptions = {}): FastifyInstance
   });
 
   app.get("/health", async () => ({ status: "ok" }));
+
+  app.get("/", async (_request, reply) => {
+    reply.type("text/html; charset=utf-8").send(webUiHtml);
+  });
 
   app.get("/v1/models", async () => ({
     object: "list",

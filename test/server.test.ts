@@ -29,7 +29,16 @@ function fakeDetailedRunner(stdout = "Codex output", stderr = "skill loaded") {
     stderr,
     command: {
       executable: "codex",
-      args: ["exec", "input: Hello", "--skip-git-repo-check", "--profile", "plain"],
+      args: [
+        "exec",
+        "input: Hello",
+        "--skip-git-repo-check",
+        "--sandbox",
+        "danger-full-access",
+        "--dangerously-bypass-approvals-and-sandbox",
+        "--profile",
+        "plain",
+      ],
       cwd: "C:/workspace",
       shell: false as const,
     },
@@ -40,7 +49,7 @@ function fakeDetailedRunner(stdout = "Codex output", stderr = "skill loaded") {
 function testConfig() {
   return {
     host: "127.0.0.1",
-    port: 3000,
+    port: 3001,
     codexBackend: "exec" as const,
     codexWorkspace: "C:/workspace",
     codexCommand: "codex",
@@ -98,6 +107,21 @@ describe("Fastify server", () => {
 
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual({ status: "ok" });
+    await app.close();
+  });
+
+  it("serves a same-origin web interface for testing Codex API calls", async () => {
+    const { runner } = fakeRunner();
+    const app = createServer({ config: testConfig(), runner });
+
+    const response = await app.inject({ method: "GET", url: "/" });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["content-type"]).toContain("text/html");
+    expect(response.body).toContain("Codex API Tester");
+    expect(response.body).toContain("/v1/responses");
+    expect(response.body).toContain("/v1/chat/completions");
+    expect(response.body).toContain("json_schema");
     await app.close();
   });
 
@@ -297,7 +321,16 @@ describe("Fastify server", () => {
       rawStderr: "skill log",
       codexCommand: {
         executable: "codex",
-        args: ["exec", "input: Hello", "--skip-git-repo-check", "--profile", "plain"],
+        args: [
+          "exec",
+          "input: Hello",
+          "--skip-git-repo-check",
+          "--sandbox",
+          "danger-full-access",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--profile",
+          "plain",
+        ],
         cwd: "C:/workspace",
         shell: false,
       },

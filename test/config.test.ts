@@ -54,6 +54,12 @@ describe("config", () => {
     expect(config.callLogDir).toBe("C:\\logs\\codexapi");
   });
 
+  it("uses the fixed local development port by default", () => {
+    const config = loadConfig({}, "C:/repo", "linux");
+
+    expect(config.port).toBe(3001);
+  });
+
   it("disables Codex plugins by default for API-launched runs", () => {
     const config = loadConfig({}, "C:/repo", "linux");
 

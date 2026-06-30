@@ -16,7 +16,13 @@ class FakeReadable extends EventEmitter {
   }
 }
 
+class FakeWritable extends EventEmitter {
+  write = vi.fn();
+  end = vi.fn();
+}
+
 class FakeChildProcess extends EventEmitter {
+  stdin = new FakeWritable();
   stdout = new FakeReadable();
   stderr = new FakeReadable();
   kill = vi.fn();
@@ -62,8 +68,11 @@ describe("Codex runner", () => {
       "codex",
       [
         "exec",
-        "Hello",
+        "-",
         "--skip-git-repo-check",
+        "--sandbox",
+        "danger-full-access",
+        "--dangerously-bypass-approvals-and-sandbox",
         "--ignore-user-config",
         "--disable",
         "plugins",
@@ -78,6 +87,8 @@ describe("Codex runner", () => {
         windowsHide: true,
       }),
     );
+    expect(child.stdin.write).toHaveBeenCalledWith("Hello");
+    expect(child.stdin.end).toHaveBeenCalled();
   });
 
   it("returns stdout and stderr from detailed runs", async () => {
@@ -110,8 +121,11 @@ describe("Codex runner", () => {
         executable: "codex",
         args: [
           "exec",
-          "Hello",
+          "-",
           "--skip-git-repo-check",
+          "--sandbox",
+          "danger-full-access",
+          "--dangerously-bypass-approvals-and-sandbox",
           "--ignore-user-config",
           "--disable",
           "plugins",
@@ -124,6 +138,57 @@ describe("Codex runner", () => {
         shell: false,
       },
     });
+  });
+
+  it("writes the prompt to stdin instead of passing it as a command argument", async () => {
+    const child = new FakeChildProcess();
+    const spawn = createFakeSpawn(child);
+    const runner = createCodexRunner({
+      command: "codex",
+      commandArgs: [],
+      workspace: "C:/workspace",
+      profile: "plain",
+      ignoreUserConfig: true,
+      timeoutMs: 1000,
+      spawn,
+    });
+    const largePrompt = "classify ".repeat(20_000);
+
+    const resultPromise = runner.runWithDetails!(largePrompt);
+    child.stdout.push("OK\n");
+    child.close(0);
+
+    await expect(resultPromise).resolves.toMatchObject({
+      stdout: "OK",
+      command: {
+        args: [
+          "exec",
+          "-",
+          "--skip-git-repo-check",
+          "--sandbox",
+          "danger-full-access",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--ignore-user-config",
+        ],
+      },
+    });
+    expect(spawn).toHaveBeenCalledWith(
+      "codex",
+      [
+        "exec",
+        "-",
+        "--skip-git-repo-check",
+        "--sandbox",
+        "danger-full-access",
+        "--dangerously-bypass-approvals-and-sandbox",
+        "--ignore-user-config",
+      ],
+      expect.objectContaining({
+        stdio: ["pipe", "pipe", "pipe"],
+      }),
+    );
+    expect(child.stdin.write).toHaveBeenCalledWith(largePrompt);
+    expect(child.stdin.end).toHaveBeenCalled();
   });
 
   it("passes request model and reasoning effort to codex exec", async () => {
@@ -151,8 +216,11 @@ describe("Codex runner", () => {
       "codex",
       [
         "exec",
-        "Hello",
+        "-",
         "--skip-git-repo-check",
+        "--sandbox",
+        "danger-full-access",
+        "--dangerously-bypass-approvals-and-sandbox",
         "--model",
         "gpt-5.4-mini",
         "-c",
@@ -193,8 +261,11 @@ describe("Codex runner", () => {
         args: [
           "C:/codex/codex.js",
           "exec",
-          "Hello",
+          "-",
           "--skip-git-repo-check",
+          "--sandbox",
+          "danger-full-access",
+          "--dangerously-bypass-approvals-and-sandbox",
           "--profile",
           "plain",
         ],
@@ -207,8 +278,11 @@ describe("Codex runner", () => {
       [
         "C:/codex/codex.js",
         "exec",
-        "Hello",
+        "-",
         "--skip-git-repo-check",
+        "--sandbox",
+        "danger-full-access",
+        "--dangerously-bypass-approvals-and-sandbox",
         "--profile",
         "plain",
       ],

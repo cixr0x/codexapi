@@ -143,8 +143,11 @@ export function runCodexPromptWithDetails(
   const args = [
     ...commandArgs,
     "exec",
-    prompt,
+    "-",
     "--skip-git-repo-check",
+    "--sandbox",
+    "danger-full-access",
+    "--dangerously-bypass-approvals-and-sandbox",
     ...(model ? ["--model", model] : []),
     ...(reasoningEffort
       ? ["-c", `model_reasoning_effort=${tomlString(reasoningEffort)}`]
@@ -171,8 +174,10 @@ export function runCodexPromptWithDetails(
       cwd: workspace,
       shell: false,
       windowsHide: true,
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: ["pipe", "pipe", "pipe"],
     });
+    child.stdin?.write(prompt);
+    child.stdin?.end();
 
     const timeout = setTimeout(() => {
       settle(() => {

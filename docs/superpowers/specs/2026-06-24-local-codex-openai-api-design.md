@@ -22,7 +22,7 @@ Streaming is not supported. Requests with `stream: true` will receive a `400` Op
 Configuration comes from environment variables with defaults:
 
 - `HOST`: bind host, default `127.0.0.1`
-- `PORT`: bind port, default `3000`
+- `PORT`: bind port, default `3001`
 - `CODEX_WORKSPACE`: fixed workspace root, default to the current process working directory
 - `CODEX_COMMAND`: Codex executable, default `codex`
 - `CODEX_PROFILE`: Codex profile, default `plain`
@@ -173,4 +173,3 @@ The first version will not support:
 - token counting
 - honoring sampling parameters
 - conversation persistence
-

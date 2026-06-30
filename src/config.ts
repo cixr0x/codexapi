@@ -44,7 +44,7 @@ export function loadConfig(
 
   return {
     host: env.HOST ?? "127.0.0.1",
-    port: parseInteger(env.PORT, 3000, "PORT"),
+    port: parseInteger(env.PORT, 3001, "PORT"),
     codexBackend: parseCodexBackend(env.CODEX_BACKEND),
     codexWorkspace: env.CODEX_WORKSPACE ?? cwd,
     codexCommand: env.CODEX_COMMAND ?? defaultCommand.command,

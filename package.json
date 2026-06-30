@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/server.ts",
+    "dev:codex": "node -e \"const {spawn}=require('node:child_process'); const child=spawn('tsx',['watch','src/server.ts'],{stdio:'inherit',shell:true,env:{...process.env,HOST:'127.0.0.1',PORT:'3001'}}); child.on('exit',code=>process.exit(code ?? 0));\"",
     "start": "node dist/src/server.js",
     "build": "tsc -p tsconfig.json",
     "test": "vitest run",
