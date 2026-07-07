@@ -282,11 +282,20 @@ function codexOptionsForResponses(
 }
 
 function selectCodexModel(model: string | undefined, config: AppConfig): string {
-  if (model && config.codexAllowedModels.includes(model)) {
+  if (!model) {
+    return config.codexDefaultModel;
+  }
+
+  if (config.codexAllowedModels.includes(model)) {
     return model;
   }
 
-  return config.codexDefaultModel;
+  throw openAiError(
+    `Model '${model}' is not allowed by this local Codex API.`,
+    "invalid_request_error",
+    "model",
+    "invalid_model",
+  );
 }
 
 function requestModel(body: unknown): string | undefined {

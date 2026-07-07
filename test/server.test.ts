@@ -125,7 +125,7 @@ describe("Fastify server", () => {
     await app.close();
   });
 
-  it("falls back to the default Codex model when chat completion model is invalid", async () => {
+  it("returns 400 when chat completion model is not allowlisted", async () => {
     const { runner, runWithDetails } = fakeDetailedRunner("Hello from Codex");
     const app = createServer({ config: testConfig(), runner });
 
@@ -138,10 +138,15 @@ describe("Fastify server", () => {
       },
     });
 
-    expect(response.statusCode).toBe(200);
-    expect(runWithDetails).toHaveBeenCalledWith("user: Hello\nassistant:", {
-      model: "gpt-5.4-mini",
-      reasoningEffort: "medium",
+    expect(response.statusCode).toBe(400);
+    expect(runWithDetails).not.toHaveBeenCalled();
+    expect(response.json()).toEqual({
+      error: {
+        message: "Model 'local-codex' is not allowed by this local Codex API.",
+        type: "invalid_request_error",
+        param: "model",
+        code: "invalid_model",
+      },
     });
     await app.close();
   });
@@ -208,6 +213,32 @@ describe("Fastify server", () => {
     await app.close();
   });
 
+  it("returns 400 when Responses model is not allowlisted", async () => {
+    const { runner, runWithDetails } = fakeDetailedRunner("Response from Codex");
+    const app = createServer({ config: testConfig(), runner });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/responses",
+      payload: {
+        model: "local-codex",
+        input: "Hello",
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(runWithDetails).not.toHaveBeenCalled();
+    expect(response.json()).toEqual({
+      error: {
+        message: "Model 'local-codex' is not allowed by this local Codex API.",
+        type: "invalid_request_error",
+        param: "model",
+        code: "invalid_model",
+      },
+    });
+    await app.close();
+  });
+
   it("falls back to the default Codex model when Responses model is absent", async () => {
     const { runner, runWithDetails } = fakeDetailedRunner("Response from Codex");
     const app = createServer({ config: testConfig(), runner });
@@ -236,7 +267,7 @@ describe("Fastify server", () => {
       method: "POST",
       url: "/v1/chat/completions",
       payload: {
-        model: "ignored-client-model",
+        model: "gpt-5.4-mini",
         messages: [{ role: "user", content: "Hello" }],
       },
     });
@@ -265,7 +296,7 @@ describe("Fastify server", () => {
       method: "POST",
       url: "/v1/responses",
       payload: {
-        model: "ignored-client-model",
+        model: "gpt-5.4-mini",
         instructions: "Be concise.",
         input: "Hello",
       },
@@ -298,7 +329,7 @@ describe("Fastify server", () => {
       method: "POST",
       url: "/v1/responses",
       payload: {
-        model: "local-codex-test",
+        model: "gpt-5.4-mini",
         input: "Hello",
       },
     });
@@ -315,7 +346,7 @@ describe("Fastify server", () => {
       endpoint: "/v1/responses",
       method: "POST",
       model: "local-codex-test",
-      requestBody: { model: "local-codex-test", input: "Hello" },
+      requestBody: { model: "gpt-5.4-mini", input: "Hello" },
       prompt: "input: Hello",
       rawStdout: "Response from Codex",
       rawStderr: "skill log",
@@ -352,7 +383,7 @@ describe("Fastify server", () => {
       method: "POST",
       url: "/v1/responses",
       payload: {
-        model: "local-codex-test",
+        model: "gpt-5.4-mini",
         input: "Translate hello.",
         text: {
           format: {
@@ -392,7 +423,7 @@ describe("Fastify server", () => {
       method: "POST",
       url: "/v1/responses",
       payload: {
-        model: "local-codex-test",
+        model: "gpt-5.4-mini",
         input: "Translate hello.",
         text: {
           format: {
@@ -425,7 +456,7 @@ describe("Fastify server", () => {
       method: "POST",
       url: "/v1/responses",
       payload: {
-        model: "local-codex-test",
+        model: "gpt-5.4-mini",
         input: "Hello",
         text: { format: { type: "grammar" } },
       },
@@ -454,7 +485,7 @@ describe("Fastify server", () => {
       method: "POST",
       url,
       payload: {
-        model: "local-codex-test",
+        model: "gpt-5.4-mini",
         stream: true,
         ...payload,
       },
@@ -489,7 +520,7 @@ describe("Fastify server", () => {
       method: "POST",
       url: "/v1/chat/completions",
       payload: {
-        model: "local-codex-test",
+        model: "gpt-5.4-mini",
         messages: [{ role: "user", content: "Hello" }],
       },
     });

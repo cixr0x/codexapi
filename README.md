@@ -40,7 +40,7 @@ Runtime configuration is read from environment variables:
 | `CODEX_EPHEMERAL` | `true` | Add `--ephemeral` to avoid persisting one-shot session files |
 | `CODEX_IGNORE_RULES` | `true` | Add `--ignore-rules` to skip user/project execpolicy rule loading |
 | `CODEX_TIMEOUT_MS` | `120000` | Per-request Codex timeout |
-| `CODEX_DEFAULT_MODEL` | `gpt-5.4-mini` | Fallback Codex model when request-body `model` is absent, blank, or not allowlisted |
+| `CODEX_DEFAULT_MODEL` | `gpt-5.4-mini` | Fallback Codex model when request-body `model` is absent or blank |
 | `CODEX_ALLOWED_MODELS` | `gpt-5.4-mini,gpt-5.5,gpt-5.3-codex-spark,gpt-5.4` | Comma- or semicolon-separated model ids accepted from request bodies |
 | `CODEX_REASONING_EFFORT` | `medium` | Reasoning effort passed to Codex calls: `minimal`, `low`, `medium`, `high`, or `xhigh` |
 | `CODEX_APP_SERVER_URL` | unset | Existing app-server WebSocket URL to use when `CODEX_BACKEND=app-server` |
@@ -82,9 +82,9 @@ npm start
 
 Streaming is not supported. Requests with `stream: true` return an OpenAI-style `400` error.
 
-For API-to-Codex calls, the wrapper passes the caller's request-body `model` through to Codex only when it appears in `CODEX_ALLOWED_MODELS`. If `model` is absent, blank, or not allowlisted, the wrapper falls back to `CODEX_DEFAULT_MODEL`, which defaults to `gpt-5.4-mini`. With the `exec` backend this becomes `--model <resolved-model>`. With the experimental `app-server` backend this becomes the `model` field on `turn/start`. `CODEX_REASONING_EFFORT` is also passed on every Codex call and defaults to `medium`.
+For API-to-Codex calls, the wrapper passes the caller's request-body `model` through to Codex only when it appears in `CODEX_ALLOWED_MODELS`. If `model` is absent or blank, the wrapper falls back to `CODEX_DEFAULT_MODEL`, which defaults to `gpt-5.4-mini`. If a caller provides a model that is not allowlisted, the API returns a 400 `invalid_request_error` with `param: "model"` and does not invoke Codex. With the `exec` backend this becomes `--model <resolved-model>`. With the experimental `app-server` backend this becomes the `model` field on `turn/start`. `CODEX_REASONING_EFFORT` is also passed on every Codex call and defaults to `medium`.
 
-`OPENAI_COMPAT_MODEL` still controls the model id returned from `/v1/models` and compatibility response bodies. If a client sends `model: "local-codex"` with the default allowlist, Codex receives the fallback model `gpt-5.4-mini`.
+`OPENAI_COMPAT_MODEL` still controls the model id returned from `/v1/models` and compatibility response bodies. If clients discover and send the `/v1/models` value, set `OPENAI_COMPAT_MODEL` to a value that also appears in `CODEX_ALLOWED_MODELS`.
 
 ## Structured Outputs
 

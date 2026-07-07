@@ -415,12 +415,12 @@ export const webUiHtml = `<!doctype html>
     function buildBody() {
       const selectedEndpoint = endpoint.value;
       const selectedFormat = format.value;
-      const requestModel = model.value.trim() || "local-codex";
+      const requestModel = model.value.trim();
       const prompt = promptInput.value;
 
       if (selectedEndpoint === "/v1/chat/completions") {
         return {
-          model: requestModel,
+          ...(requestModel ? { model: requestModel } : {}),
           messages: [
             ...(instructions.value.trim()
               ? [{ role: "system", content: instructions.value.trim() }]
@@ -431,7 +431,7 @@ export const webUiHtml = `<!doctype html>
       }
 
       const body = {
-        model: requestModel,
+        ...(requestModel ? { model: requestModel } : {}),
         instructions: instructions.value.trim(),
         input: prompt
       };
