@@ -1,8 +1,10 @@
 import { randomUUID } from "node:crypto";
 
+import type { CodexUsage } from "./codexRunner.js";
 import {
   buildStructuredOutputInstructions,
   getResponseTextFormat,
+  type ResponseTextFormat,
 } from "./structuredOutput.js";
 
 type JsonRecord = Record<string, unknown>;
@@ -120,10 +122,13 @@ export function buildResponsesPrompt(body: unknown): string {
 export function createChatCompletion({
   model,
   content,
+  usage,
 }: {
   model: string;
   content: string;
+  usage?: CodexUsage;
 }) {
+  const normalizedUsage = normalizeUsage(usage);
   return {
     id: prefixedId("chatcmpl"),
     object: "chat.completion",
@@ -140,9 +145,15 @@ export function createChatCompletion({
       },
     ],
     usage: {
-      prompt_tokens: 0,
-      completion_tokens: 0,
-      total_tokens: 0,
+      prompt_tokens: normalizedUsage.inputTokens,
+      completion_tokens: normalizedUsage.outputTokens,
+      total_tokens: normalizedUsage.inputTokens + normalizedUsage.outputTokens,
+      prompt_tokens_details: {
+        cached_tokens: normalizedUsage.cachedInputTokens,
+      },
+      completion_tokens_details: {
+        reasoning_tokens: normalizedUsage.reasoningOutputTokens,
+      },
     },
   };
 }
@@ -150,16 +161,29 @@ export function createChatCompletion({
 export function createResponse({
   model,
   content,
+  reasoningEffort,
+  textFormat = { type: "text" },
+  usage,
 }: {
   model: string;
   content: string;
+  reasoningEffort?: string;
+  textFormat?: ResponseTextFormat | { type: "text" };
+  usage?: CodexUsage;
 }) {
+  const completedAt = nowSeconds();
+  const normalizedUsage = normalizeUsage(usage);
   return {
     id: prefixedId("resp"),
     object: "response",
-    created_at: nowSeconds(),
+    created_at: completedAt,
     model,
     status: "completed",
+    completed_at: completedAt,
+    error: null,
+    incomplete_details: null,
+    instructions: null,
+    max_output_tokens: null,
     output_text: content,
     output: [
       {
@@ -176,12 +200,41 @@ export function createResponse({
         ],
       },
     ],
-    usage: {
-      input_tokens: 0,
-      output_tokens: 0,
-      total_tokens: 0,
+    parallel_tool_calls: false,
+    previous_response_id: null,
+    reasoning: {
+      effort: reasoningEffort ?? null,
+      summary: null,
     },
+    store: false,
+    text: { format: textFormat },
+    tool_choice: "auto",
+    tools: [],
+    truncation: "disabled",
+    usage: {
+      input_tokens: normalizedUsage.inputTokens,
+      input_tokens_details: {
+        cached_tokens: normalizedUsage.cachedInputTokens,
+      },
+      output_tokens: normalizedUsage.outputTokens,
+      output_tokens_details: {
+        reasoning_tokens: normalizedUsage.reasoningOutputTokens,
+      },
+      total_tokens: normalizedUsage.inputTokens + normalizedUsage.outputTokens,
+    },
+    metadata: {},
   };
+}
+
+function normalizeUsage(usage: CodexUsage | undefined): CodexUsage {
+  return (
+    usage ?? {
+      inputTokens: 0,
+      cachedInputTokens: 0,
+      outputTokens: 0,
+      reasoningOutputTokens: 0,
+    }
+  );
 }
 
 function rejectStreaming(request: JsonRecord): void {

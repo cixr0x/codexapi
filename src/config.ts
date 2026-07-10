@@ -1,7 +1,15 @@
 import { join } from "node:path";
 
 export type CodexBackend = "exec" | "app-server";
-export type CodexReasoningEffort = "minimal" | "low" | "medium" | "high" | "xhigh";
+export const CODEX_REASONING_EFFORTS = [
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+  "ultra",
+] as const;
+export type CodexReasoningEffort = (typeof CODEX_REASONING_EFFORTS)[number];
 
 export interface AppConfig {
   host: string;
@@ -25,7 +33,6 @@ export interface AppConfig {
   codexAppServerStartTimeoutMs: number;
   codexAppServerDisableApps: boolean;
   codexAppServerDisableNodeReplMcp: boolean;
-  openAICompatModel: string;
   callLoggingEnabled: boolean;
   callLogDir: string;
 }
@@ -60,10 +67,13 @@ export function loadConfig(
     codexTimeoutMs: parseInteger(env.CODEX_TIMEOUT_MS, 120000, "CODEX_TIMEOUT_MS"),
     codexDefaultModel: parseString(env.CODEX_DEFAULT_MODEL, "gpt-5.4-mini"),
     codexAllowedModels: parseList(env.CODEX_ALLOWED_MODELS, [
-      "gpt-5.4-mini",
+      "gpt-5.6-sol",
+      "gpt-5.6-terra",
+      "gpt-5.6-luna",
       "gpt-5.5",
-      "gpt-5.3-codex-spark",
       "gpt-5.4",
+      "gpt-5.4-mini",
+      "gpt-5.3-codex-spark",
     ]),
     codexReasoningEffort: parseCodexReasoningEffort(env.CODEX_REASONING_EFFORT),
     codexAppServerUrl: env.CODEX_APP_SERVER_URL?.trim() || undefined,
@@ -83,7 +93,6 @@ export function loadConfig(
       env.CODEX_APP_SERVER_DISABLE_NODE_REPL_MCP,
       true,
     ),
-    openAICompatModel: env.OPENAI_COMPAT_MODEL ?? "local-codex",
     callLoggingEnabled: parseBoolean(env.CODEX_CALL_LOGGING, false),
     callLogDir: env.CODEX_CALL_LOG_DIR ?? join(cwd, ".codexapi", "logs"),
   };
@@ -191,17 +200,18 @@ function parseCodexReasoningEffort(value: string | undefined): CodexReasoningEff
     return "medium";
   }
 
-  if (
-    value === "minimal" ||
-    value === "low" ||
-    value === "medium" ||
-    value === "high" ||
-    value === "xhigh"
-  ) {
+  if (isCodexReasoningEffort(value)) {
     return value;
   }
 
   throw new Error(
-    "CODEX_REASONING_EFFORT must be one of: minimal, low, medium, high, xhigh.",
+    `CODEX_REASONING_EFFORT must be one of: ${CODEX_REASONING_EFFORTS.join(", ")}.`,
+  );
+}
+
+export function isCodexReasoningEffort(value: unknown): value is CodexReasoningEffort {
+  return (
+    typeof value === "string" &&
+    CODEX_REASONING_EFFORTS.includes(value as CodexReasoningEffort)
   );
 }

@@ -82,10 +82,13 @@ describe("config", () => {
     expect(config.codexDisableShellSnapshot).toBe(true);
     expect(config.codexDefaultModel).toBe("gpt-5.4-mini");
     expect(config.codexAllowedModels).toEqual([
-      "gpt-5.4-mini",
+      "gpt-5.6-sol",
+      "gpt-5.6-terra",
+      "gpt-5.6-luna",
       "gpt-5.5",
-      "gpt-5.3-codex-spark",
       "gpt-5.4",
+      "gpt-5.4-mini",
+      "gpt-5.3-codex-spark",
     ]);
     expect(config.codexReasoningEffort).toBe("medium");
   });
@@ -137,11 +140,18 @@ describe("config", () => {
     expect(config.codexAppServerDisableNodeReplMcp).toBe(false);
   });
 
-  it("parses Codex reasoning effort config", () => {
-    const config = loadConfig({ CODEX_REASONING_EFFORT: "low" }, "C:/repo", "linux");
+  it.each(["low", "max", "ultra"])(
+    "parses Codex reasoning effort config value %s",
+    (effort) => {
+      const config = loadConfig(
+        { CODEX_REASONING_EFFORT: effort },
+        "C:/repo",
+        "linux",
+      );
 
-    expect(config.codexReasoningEffort).toBe("low");
-  });
+      expect(config.codexReasoningEffort).toBe(effort);
+    },
+  );
 
   it("parses Codex default and allowed model config", () => {
     const config = loadConfig(
@@ -166,6 +176,8 @@ describe("config", () => {
   it("rejects unsupported Codex reasoning effort values", () => {
     expect(() =>
       loadConfig({ CODEX_REASONING_EFFORT: "maximum" }, "C:/repo", "linux"),
-    ).toThrow("CODEX_REASONING_EFFORT must be one of: minimal, low, medium, high, xhigh.");
+    ).toThrow(
+      "CODEX_REASONING_EFFORT must be one of: low, medium, high, xhigh, max, ultra.",
+    );
   });
 });

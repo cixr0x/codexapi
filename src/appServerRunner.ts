@@ -288,13 +288,12 @@ function runPromptOverSocket({
           return;
         }
 
+        notify("initialized", {});
         threadStartId = send("thread/start", {
           cwd: workspace,
-          runtimeWorkspaceRoots: [workspace],
           approvalPolicy: "never",
           sandbox: "danger-full-access",
           ephemeral: true,
-          multiAgentMode: "none",
         });
         return;
       }
@@ -322,7 +321,6 @@ function runPromptOverSocket({
           ...(reasoningEffort ? { effort: reasoningEffort } : {}),
           approvalPolicy: "never",
           sandboxPolicy: { type: "dangerFullAccess" },
-          multiAgentMode: "none",
         });
         return;
       }
@@ -408,12 +406,11 @@ function runPromptOverSocket({
 
     initializeId = send("initialize", {
       clientInfo: { name: "codexapi", title: "codexapi", version: "0.1.0" },
-      capabilities: {
-        experimentalApi: true,
-        requestAttestation: false,
-        optOutNotificationMethods: [],
-      },
     });
+
+    function notify(method: string, params: unknown): void {
+      socket.send(JSON.stringify({ method, params }));
+    }
 
     function send(method: string, params: unknown): string {
       const id = String(nextId++);

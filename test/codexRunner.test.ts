@@ -1,4 +1,5 @@
 import { EventEmitter } from "node:events";
+import { access, readFile } from "node:fs/promises";
 
 import { describe, expect, it, vi } from "vitest";
 
@@ -41,6 +42,35 @@ function createFakeSpawn(child: FakeChildProcess) {
   return spawn;
 }
 
+async function waitUntil(condition: () => boolean): Promise<void> {
+  const deadline = Date.now() + 1000;
+  while (!condition()) {
+    if (Date.now() > deadline) {
+      throw new Error("Timed out waiting for test condition.");
+    }
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+}
+
+function jsonlCompletion(text: string): string {
+  return [
+    JSON.stringify({ type: "thread.started", thread_id: "thread-1" }),
+    JSON.stringify({
+      type: "item.completed",
+      item: { id: "item-1", type: "agent_message", text },
+    }),
+    JSON.stringify({
+      type: "turn.completed",
+      usage: {
+        input_tokens: 21,
+        cached_input_tokens: 8,
+        output_tokens: 5,
+        reasoning_output_tokens: 2,
+      },
+    }),
+  ].join("\n");
+}
+
 describe("Codex runner", () => {
   it("invokes codex exec with the expected arguments and workspace", async () => {
     const child = new FakeChildProcess();
@@ -69,6 +99,7 @@ describe("Codex runner", () => {
       [
         "exec",
         "-",
+        "--json",
         "--skip-git-repo-check",
         "--sandbox",
         "danger-full-access",
@@ -116,12 +147,14 @@ describe("Codex runner", () => {
 
     await expect(resultPromise).resolves.toEqual({
       stdout: "OK",
+      rawStdout: "OK",
       stderr: "skill loader warning",
       command: {
         executable: "codex",
         args: [
           "exec",
           "-",
+          "--json",
           "--skip-git-repo-check",
           "--sandbox",
           "danger-full-access",
@@ -164,6 +197,7 @@ describe("Codex runner", () => {
         args: [
           "exec",
           "-",
+          "--json",
           "--skip-git-repo-check",
           "--sandbox",
           "danger-full-access",
@@ -177,6 +211,7 @@ describe("Codex runner", () => {
       [
         "exec",
         "-",
+        "--json",
         "--skip-git-repo-check",
         "--sandbox",
         "danger-full-access",
@@ -217,6 +252,7 @@ describe("Codex runner", () => {
       [
         "exec",
         "-",
+        "--json",
         "--skip-git-repo-check",
         "--sandbox",
         "danger-full-access",
@@ -233,6 +269,69 @@ describe("Codex runner", () => {
         windowsHide: true,
       }),
     );
+  });
+
+  it("parses the final message and token usage from Codex JSONL", async () => {
+    const child = new FakeChildProcess();
+    const spawn = createFakeSpawn(child);
+    const runner = createCodexRunner({
+      command: "codex",
+      workspace: "C:/workspace",
+      profile: "plain",
+      ignoreUserConfig: true,
+      timeoutMs: 1000,
+      spawn,
+    });
+    const rawStdout = jsonlCompletion("Final answer");
+
+    const resultPromise = runner.runWithDetails!("Hello");
+    child.stdout.push(`${rawStdout}\n`);
+    child.close(0);
+
+    await expect(resultPromise).resolves.toMatchObject({
+      stdout: "Final answer",
+      rawStdout,
+      usage: {
+        inputTokens: 21,
+        cachedInputTokens: 8,
+        outputTokens: 5,
+        reasoningOutputTokens: 2,
+      },
+    });
+  });
+
+  it("writes an output schema to a temporary file and removes it after execution", async () => {
+    const child = new FakeChildProcess();
+    const spawn = createFakeSpawn(child);
+    const runner = createCodexRunner({
+      command: "codex",
+      workspace: "C:/workspace",
+      profile: "plain",
+      ignoreUserConfig: true,
+      timeoutMs: 1000,
+      spawn,
+    });
+    const schema = {
+      type: "object",
+      additionalProperties: false,
+      properties: { answer: { type: "string" } },
+      required: ["answer"],
+    };
+
+    const resultPromise = runner.runWithDetails!("Hello", { outputSchema: schema });
+    await waitUntil(() => spawn.mock.calls.length === 1);
+    const args = spawn.mock.calls[0]?.[1] ?? [];
+    const schemaFlagIndex = args.indexOf("--output-schema");
+    const schemaPath = args[schemaFlagIndex + 1];
+
+    expect(schemaFlagIndex).toBeGreaterThan(-1);
+    expect(JSON.parse(await readFile(schemaPath, "utf8"))).toEqual(schema);
+
+    child.stdout.push(`${jsonlCompletion('{"answer":"OK"}')}\n`);
+    child.close(0);
+
+    await expect(resultPromise).resolves.toMatchObject({ stdout: '{"answer":"OK"}' });
+    await expect(access(schemaPath)).rejects.toThrow();
   });
 
   it("rejects with a typed error when codex exits non-zero", async () => {
@@ -262,6 +361,7 @@ describe("Codex runner", () => {
           "C:/codex/codex.js",
           "exec",
           "-",
+          "--json",
           "--skip-git-repo-check",
           "--sandbox",
           "danger-full-access",
@@ -279,6 +379,7 @@ describe("Codex runner", () => {
         "C:/codex/codex.js",
         "exec",
         "-",
+        "--json",
         "--skip-git-repo-check",
         "--sandbox",
         "danger-full-access",

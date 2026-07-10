@@ -131,14 +131,20 @@ describe("OpenAI compatibility mapping", () => {
     ).toThrow(OpenAIHttpError);
   });
 
-  it("creates chat completion response objects with zeroed usage", () => {
+  it("creates chat completion response objects with Codex usage", () => {
     const completion = createChatCompletion({
-      model: "local-codex",
+      model: "gpt-5.6-sol",
       content: "Codex output",
+      usage: {
+        inputTokens: 21,
+        cachedInputTokens: 8,
+        outputTokens: 5,
+        reasoningOutputTokens: 2,
+      },
     });
 
     expect(completion.object).toBe("chat.completion");
-    expect(completion.model).toBe("local-codex");
+    expect(completion.model).toBe("gpt-5.6-sol");
     expect(completion.choices).toEqual([
       {
         index: 0,
@@ -147,21 +153,36 @@ describe("OpenAI compatibility mapping", () => {
       },
     ]);
     expect(completion.usage).toEqual({
-      prompt_tokens: 0,
-      completion_tokens: 0,
-      total_tokens: 0,
+      prompt_tokens: 21,
+      completion_tokens: 5,
+      total_tokens: 26,
+      prompt_tokens_details: { cached_tokens: 8 },
+      completion_tokens_details: { reasoning_tokens: 2 },
     });
   });
 
   it("creates responses objects with output_text and assistant output item", () => {
     const response = createResponse({
-      model: "local-codex",
+      model: "gpt-5.6-sol",
       content: "Codex output",
+      reasoningEffort: "high",
+      textFormat: { type: "text" },
+      usage: {
+        inputTokens: 21,
+        cachedInputTokens: 8,
+        outputTokens: 5,
+        reasoningOutputTokens: 2,
+      },
     });
 
     expect(response.object).toBe("response");
-    expect(response.model).toBe("local-codex");
+    expect(response.model).toBe("gpt-5.6-sol");
     expect(response.status).toBe("completed");
+    expect(response.completed_at).toEqual(expect.any(Number));
+    expect(response.error).toBeNull();
+    expect(response.incomplete_details).toBeNull();
+    expect(response.reasoning).toEqual({ effort: "high", summary: null });
+    expect(response.text).toEqual({ format: { type: "text" } });
     expect(response.output_text).toBe("Codex output");
     expect(response.output).toEqual([
       {
@@ -179,9 +200,11 @@ describe("OpenAI compatibility mapping", () => {
       },
     ]);
     expect(response.usage).toEqual({
-      input_tokens: 0,
-      output_tokens: 0,
-      total_tokens: 0,
+      input_tokens: 21,
+      input_tokens_details: { cached_tokens: 8 },
+      output_tokens: 5,
+      output_tokens_details: { reasoning_tokens: 2 },
+      total_tokens: 26,
     });
   });
 });

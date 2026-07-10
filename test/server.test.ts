@@ -26,7 +26,14 @@ function fakeDetailedRunner(stdout = "Codex output", stderr = "skill loaded") {
   const run = vi.fn<CodexRunner["run"]>(async () => stdout);
   const runWithDetails = vi.fn<NonNullable<CodexRunner["runWithDetails"]>>(async () => ({
     stdout,
+    rawStdout: "raw codex events",
     stderr,
+    usage: {
+      inputTokens: 21,
+      cachedInputTokens: 8,
+      outputTokens: 5,
+      reasoningOutputTokens: 2,
+    },
     command: {
       executable: "codex",
       args: [
@@ -66,9 +73,8 @@ function testConfig() {
     codexAppServerDisableApps: true,
     codexAppServerDisableNodeReplMcp: true,
     codexDefaultModel: "gpt-5.4-mini",
-    codexAllowedModels: ["gpt-5.4-mini", "gpt-5.5"],
+    codexAllowedModels: ["gpt-5.4-mini", "gpt-5.5", "gpt-5.6-sol"],
     codexReasoningEffort: "medium" as const,
-    openAICompatModel: "local-codex-test",
     callLoggingEnabled: false,
     callLogDir: "C:/workspace/.codexapi/logs",
   };
@@ -182,11 +188,9 @@ describe("Fastify server", () => {
     expect(response.json()).toMatchObject({
       object: "list",
       data: [
-        {
-          id: "local-codex-test",
-          object: "model",
-          owned_by: "local",
-        },
+        { id: "gpt-5.4-mini", object: "model", owned_by: "local" },
+        { id: "gpt-5.5", object: "model", owned_by: "local" },
+        { id: "gpt-5.6-sol", object: "model", owned_by: "local" },
       ],
     });
     await app.close();
@@ -209,6 +213,81 @@ describe("Fastify server", () => {
     expect(runWithDetails).toHaveBeenCalledWith("input: Hello", {
       model: "gpt-5.5",
       reasoningEffort: "medium",
+    });
+    await app.close();
+  });
+
+  it("honors request-level reasoning effort for both compatibility endpoints", async () => {
+    const chat = fakeDetailedRunner("Chat response");
+    const chatApp = createServer({ config: testConfig(), runner: chat.runner });
+    const chatResponse = await chatApp.inject({
+      method: "POST",
+      url: "/v1/chat/completions",
+      payload: {
+        model: "gpt-5.6-sol",
+        reasoning_effort: "high",
+        messages: [{ role: "user", content: "Hello" }],
+      },
+    });
+
+    expect(chatResponse.statusCode).toBe(200);
+    expect(chat.runWithDetails).toHaveBeenCalledWith("user: Hello\nassistant:", {
+      model: "gpt-5.6-sol",
+      reasoningEffort: "high",
+    });
+    await chatApp.close();
+
+    const responses = fakeDetailedRunner("Response");
+    const responsesApp = createServer({
+      config: testConfig(),
+      runner: responses.runner,
+    });
+    const responsesResponse = await responsesApp.inject({
+      method: "POST",
+      url: "/v1/responses",
+      payload: {
+        model: "gpt-5.6-sol",
+        reasoning: { effort: "max" },
+        input: "Hello",
+      },
+    });
+
+    expect(responsesResponse.statusCode).toBe(200);
+    expect(responses.runWithDetails).toHaveBeenCalledWith("input: Hello", {
+      model: "gpt-5.6-sol",
+      reasoningEffort: "max",
+    });
+    expect(responsesResponse.json()).toMatchObject({
+      model: "gpt-5.6-sol",
+      reasoning: { effort: "max", summary: null },
+    });
+    await responsesApp.close();
+  });
+
+  it("rejects unsupported request reasoning effort before invoking Codex", async () => {
+    const { runner, runWithDetails } = fakeDetailedRunner();
+    const app = createServer({ config: testConfig(), runner });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/responses",
+      payload: {
+        model: "gpt-5.6-sol",
+        reasoning: { effort: "maximum" },
+        input: "Hello",
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(runWithDetails).not.toHaveBeenCalled();
+    expect(response.json()).toEqual({
+      error: {
+        message:
+          "reasoning.effort must be one of: low, medium, high, xhigh, max, ultra.",
+        type: "invalid_request_error",
+        param: "reasoning.effort",
+        code: "invalid_reasoning_effort",
+      },
     });
     await app.close();
   });
@@ -276,7 +355,7 @@ describe("Fastify server", () => {
     expect(run).toHaveBeenCalledWith("user: Hello\nassistant:");
     expect(response.json()).toMatchObject({
       object: "chat.completion",
-      model: "local-codex-test",
+      model: "gpt-5.4-mini",
       choices: [
         {
           index: 0,
@@ -306,7 +385,7 @@ describe("Fastify server", () => {
     expect(run).toHaveBeenCalledWith("instructions: Be concise.\ninput: Hello");
     expect(response.json()).toMatchObject({
       object: "response",
-      model: "local-codex-test",
+      model: "gpt-5.4-mini",
       status: "completed",
       output_text: "Response from Codex",
     });
@@ -345,10 +424,10 @@ describe("Fastify server", () => {
     expect(entry).toMatchObject({
       endpoint: "/v1/responses",
       method: "POST",
-      model: "local-codex-test",
+      model: "gpt-5.4-mini",
       requestBody: { model: "gpt-5.4-mini", input: "Hello" },
       prompt: "input: Hello",
-      rawStdout: "Response from Codex",
+      rawStdout: "raw codex events",
       rawStderr: "skill log",
       codexCommand: {
         executable: "codex",

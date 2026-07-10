@@ -5,7 +5,12 @@ import { pathToFileURL } from "node:url";
 
 import { createAppServerCodexRunner } from "./appServerRunner.js";
 import { createCallLogger, type CallLogger, type CallLogEntry } from "./callLogger.js";
-import { type AppConfig, loadConfig } from "./config.js";
+import {
+  CODEX_REASONING_EFFORTS,
+  type AppConfig,
+  isCodexReasoningEffort,
+  loadConfig,
+} from "./config.js";
 import {
   CodexRunnerError,
   type CodexRunOptions,
@@ -76,14 +81,12 @@ export function createServer(options: CreateServerOptions = {}): FastifyInstance
 
   app.get("/v1/models", async () => ({
     object: "list",
-    data: [
-      {
-        id: config.openAICompatModel,
-        object: "model",
-        created: 0,
-        owned_by: "local",
-      },
-    ],
+    data: config.codexAllowedModels.map((model) => ({
+      id: model,
+      object: "model",
+      created: 0,
+      owned_by: "local",
+    })),
   }));
 
   app.post("/v1/chat/completions", async (request, reply) => {
@@ -91,14 +94,17 @@ export function createServer(options: CreateServerOptions = {}): FastifyInstance
     const callId = createCallId();
     let prompt: string | undefined;
     let runResult: CodexRunResult | undefined;
+    let selectedModel: string | undefined;
 
     try {
       prompt = buildChatPrompt(request.body);
-      const codexOptions = codexOptionsForRequest(request.body, config);
+      const codexOptions = codexOptionsForChat(request.body, config);
+      selectedModel = codexOptions.model ?? config.codexDefaultModel;
       runResult = await runPromptWithDetails(runner, prompt, codexOptions);
       const responseBody = createChatCompletion({
-        model: config.openAICompatModel,
+        model: selectedModel,
         content: runResult.stdout,
+        usage: runResult.usage,
       });
       await logCall(callLogger, {
         id: callId,
@@ -106,10 +112,10 @@ export function createServer(options: CreateServerOptions = {}): FastifyInstance
         endpoint: "/v1/chat/completions",
         method: request.method,
         requestBody: request.body,
-        model: config.openAICompatModel,
+        model: selectedModel,
         prompt,
         codexCommand: runResult.command,
-        rawStdout: runResult.stdout,
+        rawStdout: runResult.rawStdout ?? runResult.stdout,
         rawStderr: runResult.stderr,
         outputText: runResult.stdout,
         statusCode: 200,
@@ -123,10 +129,11 @@ export function createServer(options: CreateServerOptions = {}): FastifyInstance
         endpoint: "/v1/chat/completions",
         method: request.method,
         requestBody: request.body,
-        model: config.openAICompatModel,
+        model: selectedModel ?? requestModel(request.body),
         prompt,
         codexCommand: runResult?.command ?? runnerErrorCommand(error),
-        rawStdout: runResult?.stdout,
+        rawStdout:
+          runResult?.rawStdout ?? runResult?.stdout ?? runnerErrorStdout(error),
         rawStderr: runResult?.stderr ?? runnerErrorStderr(error),
         statusCode: mappedError.statusCode,
         error: mappedError.body.error,
@@ -142,19 +149,23 @@ export function createServer(options: CreateServerOptions = {}): FastifyInstance
     let prompt: string | undefined;
     let runResult: CodexRunResult | undefined;
     let outputText: string | undefined;
+    let selectedModel: string | undefined;
+    let reasoningEffort: string | undefined;
 
     try {
       prompt = buildResponsesPrompt(request.body);
       const format = getResponseTextFormat(request.body);
-      runResult = await runPromptWithDetails(
-        runner,
-        prompt,
-        codexOptionsForResponses(request.body, config, format),
-      );
+      const codexOptions = codexOptionsForResponses(request.body, config, format);
+      selectedModel = codexOptions.model ?? config.codexDefaultModel;
+      reasoningEffort = codexOptions.reasoningEffort;
+      runResult = await runPromptWithDetails(runner, prompt, codexOptions);
       outputText = normalizeStructuredOutput(runResult.stdout, format);
       const responseBody = createResponse({
-        model: config.openAICompatModel,
+        model: selectedModel,
         content: outputText,
+        reasoningEffort,
+        textFormat: format ?? { type: "text" },
+        usage: runResult.usage,
       });
       await logCall(callLogger, {
         id: callId,
@@ -162,10 +173,10 @@ export function createServer(options: CreateServerOptions = {}): FastifyInstance
         endpoint: "/v1/responses",
         method: request.method,
         requestBody: request.body,
-        model: config.openAICompatModel,
+        model: selectedModel,
         prompt,
         codexCommand: runResult.command,
-        rawStdout: runResult.stdout,
+        rawStdout: runResult.rawStdout ?? runResult.stdout,
         rawStderr: runResult.stderr,
         outputText,
         statusCode: 200,
@@ -179,10 +190,11 @@ export function createServer(options: CreateServerOptions = {}): FastifyInstance
         endpoint: "/v1/responses",
         method: request.method,
         requestBody: request.body,
-        model: config.openAICompatModel,
+        model: selectedModel ?? requestModel(request.body),
         prompt,
         codexCommand: runResult?.command ?? runnerErrorCommand(error),
-        rawStdout: runResult?.stdout,
+        rawStdout:
+          runResult?.rawStdout ?? runResult?.stdout ?? runnerErrorStdout(error),
         rawStderr: runResult?.stderr ?? runnerErrorStderr(error),
         outputText,
         statusCode: mappedError.statusCode,
@@ -260,10 +272,14 @@ async function runPromptWithDetails(
   };
 }
 
-function codexOptionsForRequest(body: unknown, config: AppConfig): CodexRunOptions {
+function codexOptionsForChat(body: unknown, config: AppConfig): CodexRunOptions {
   return {
     model: selectCodexModel(requestModel(body), config),
-    reasoningEffort: config.codexReasoningEffort,
+    reasoningEffort: selectReasoningEffort(
+      requestChatReasoningEffort(body),
+      "reasoning_effort",
+      config,
+    ),
   };
 }
 
@@ -272,13 +288,62 @@ function codexOptionsForResponses(
   config: AppConfig,
   format: ResponseTextFormat | null,
 ): CodexRunOptions {
-  const options = codexOptionsForRequest(body, config);
+  const options: CodexRunOptions = {
+    model: selectCodexModel(requestModel(body), config),
+    reasoningEffort: selectReasoningEffort(
+      requestResponsesReasoningEffort(body),
+      "reasoning.effort",
+      config,
+    ),
+  };
   const outputSchema = outputSchemaForFormat(format);
   if (outputSchema !== undefined) {
     options.outputSchema = outputSchema;
   }
 
   return options;
+}
+
+function selectReasoningEffort(
+  effort: unknown,
+  param: string,
+  config: AppConfig,
+): string {
+  if (effort === undefined) {
+    return config.codexReasoningEffort;
+  }
+
+  if (isCodexReasoningEffort(effort)) {
+    return effort;
+  }
+
+  throw openAiError(
+    `${param} must be one of: ${CODEX_REASONING_EFFORTS.join(", ")}.`,
+    "invalid_request_error",
+    param,
+    "invalid_reasoning_effort",
+  );
+}
+
+function requestChatReasoningEffort(body: unknown): unknown {
+  return isRecord(body) ? body.reasoning_effort : undefined;
+}
+
+function requestResponsesReasoningEffort(body: unknown): unknown {
+  if (!isRecord(body) || body.reasoning === undefined) {
+    return undefined;
+  }
+
+  if (!isRecord(body.reasoning)) {
+    throw openAiError(
+      "reasoning must be a JSON object.",
+      "invalid_request_error",
+      "reasoning",
+      "invalid_reasoning",
+    );
+  }
+
+  return body.reasoning.effort;
 }
 
 function selectCodexModel(model: string | undefined, config: AppConfig): string {
@@ -378,6 +443,10 @@ async function logCall(
 
 function runnerErrorStderr(error: unknown): string | undefined {
   return error instanceof CodexRunnerError ? error.stderr : undefined;
+}
+
+function runnerErrorStdout(error: unknown): string | undefined {
+  return error instanceof CodexRunnerError ? error.stdout : undefined;
 }
 
 function runnerErrorCommand(error: unknown): CodexRunResult["command"] {

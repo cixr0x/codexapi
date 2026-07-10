@@ -1,4 +1,13 @@
+import {
+  Ajv2020,
+  type ErrorObject,
+  type ValidateFunction,
+} from "ajv/dist/2020.js";
+
 type JsonRecord = Record<string, unknown>;
+
+const ajv = new Ajv2020({ allErrors: true, strict: false });
+const schemaValidators = new WeakMap<object, ValidateFunction>();
 
 export type ResponseTextFormat =
   | { type: "json_object" }
@@ -71,6 +80,12 @@ export function getResponseTextFormat(body: unknown): ResponseTextFormat | null 
       );
     }
 
+    getSchemaValidator(format.schema, {
+      statusCode: 400,
+      code: "invalid_response_format",
+      param: "text.format.schema",
+    });
+
     return {
       type: "json_schema",
       name: format.name,
@@ -130,7 +145,10 @@ export function normalizeStructuredOutput(
   }
 
   if (format.type === "json_schema") {
-    validateAgainstSchema(parsed, format.schema, "$");
+    const validate = getSchemaValidator(format.schema);
+    if (!validate(parsed)) {
+      throw new StructuredOutputError(formatSchemaError(validate.errors));
+    }
   }
 
   return JSON.stringify(parsed);
@@ -202,108 +220,72 @@ function extractFirstJsonObject(content: string): string | null {
   return null;
 }
 
-function validateAgainstSchema(value: unknown, schema: unknown, path: string): void {
+function getSchemaValidator(
+  schema: unknown,
+  errorOptions: {
+    statusCode?: number;
+    code?: string;
+    param?: string | null;
+  } = {},
+): ValidateFunction {
   if (!isRecord(schema)) {
-    return;
-  }
-
-  validateType(value, schema.type, path);
-
-  if (schema.type === "object" || shouldTreatAsObjectSchema(schema)) {
-    validateObject(value, schema, path);
-  }
-
-  if (schema.type === "array") {
-    validateArray(value, schema, path);
-  }
-}
-
-function validateObject(value: unknown, schema: JsonRecord, path: string): void {
-  if (!isRecord(value)) {
-    throw new StructuredOutputError(`${path} must be an object.`);
-  }
-
-  const properties = isRecord(schema.properties) ? schema.properties : {};
-  const required = Array.isArray(schema.required)
-    ? schema.required.filter((item): item is string => typeof item === "string")
-    : [];
-
-  for (const key of required) {
-    if (!Object.prototype.hasOwnProperty.call(value, key)) {
-      throw new StructuredOutputError(`${path}.${key} is required.`);
-    }
-  }
-
-  if (schema.additionalProperties === false) {
-    for (const key of Object.keys(value)) {
-      if (!Object.prototype.hasOwnProperty.call(properties, key)) {
-        throw new StructuredOutputError(`${path}.${key} is not allowed.`);
-      }
-    }
-  }
-
-  for (const [key, propertySchema] of Object.entries(properties)) {
-    if (Object.prototype.hasOwnProperty.call(value, key)) {
-      validateAgainstSchema(value[key], propertySchema, `${path}.${key}`);
-    }
-  }
-}
-
-function validateArray(value: unknown, schema: JsonRecord, path: string): void {
-  if (!Array.isArray(value)) {
-    throw new StructuredOutputError(`${path} must be an array.`);
-  }
-
-  if (schema.items === undefined) {
-    return;
-  }
-
-  value.forEach((item, index) => {
-    validateAgainstSchema(item, schema.items, `${path}[${index}]`);
-  });
-}
-
-function validateType(value: unknown, type: unknown, path: string): void {
-  if (type === undefined) {
-    return;
-  }
-
-  const types = Array.isArray(type) ? type : [type];
-  const valid = types.some((candidate) => matchesType(value, candidate));
-  if (!valid) {
     throw new StructuredOutputError(
-      `${path} must be ${types.map(String).join(" or ")}.`,
+      "text.format.schema must be a valid JSON Schema object.",
+      errorOptions,
+    );
+  }
+
+  const cached = schemaValidators.get(schema);
+  if (cached) {
+    return cached;
+  }
+
+  try {
+    const validate = ajv.compile(schema);
+    schemaValidators.set(schema, validate);
+    return validate;
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : "Invalid JSON Schema.";
+    throw new StructuredOutputError(
+      `text.format.schema must be a valid JSON Schema: ${detail}`,
+      errorOptions,
     );
   }
 }
 
-function matchesType(value: unknown, type: unknown): boolean {
-  switch (type) {
-    case "string":
-      return typeof value === "string";
-    case "number":
-      return typeof value === "number" && Number.isFinite(value);
-    case "integer":
-      return typeof value === "number" && Number.isInteger(value);
-    case "boolean":
-      return typeof value === "boolean";
-    case "null":
-      return value === null;
-    case "object":
-      return isRecord(value);
-    case "array":
-      return Array.isArray(value);
-    default:
-      return true;
+function formatSchemaError(errors: ErrorObject[] | null | undefined): string {
+  const error = errors?.[0];
+  if (!error) {
+    return "Structured output did not match the requested JSON Schema.";
   }
+
+  const path = jsonPointerPath(error.instancePath);
+  if (error.keyword === "required") {
+    return `${appendPath(path, String(error.params.missingProperty))} is required.`;
+  }
+
+  if (error.keyword === "additionalProperties") {
+    return `${appendPath(path, String(error.params.additionalProperty))} is not allowed.`;
+  }
+
+  const message = error.message ?? "is invalid";
+  return `${path} ${message}${message.endsWith(".") ? "" : "."}`;
 }
 
-function shouldTreatAsObjectSchema(schema: JsonRecord): boolean {
-  return (
-    isRecord(schema.properties) ||
-    Array.isArray(schema.required) ||
-    schema.additionalProperties === false
-  );
+function jsonPointerPath(pointer: string): string {
+  if (!pointer) {
+    return "$";
+  }
+
+  return `$${pointer
+    .split("/")
+    .slice(1)
+    .map((part) => `.${part.replaceAll("~1", "/").replaceAll("~0", "~")}`)
+    .join("")}`;
+}
+
+function appendPath(path: string, property: string): string {
+  return `${path}.${property}`;
 }
 
 function isRecord(value: unknown): value is JsonRecord {

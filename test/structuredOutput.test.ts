@@ -167,6 +167,42 @@ describe("structured output", () => {
     ).toThrow(/extra/);
   });
 
+  it("validates JSON Schema enum and numeric constraints", () => {
+    const format = {
+      type: "json_schema" as const,
+      name: "rating",
+      strict: true,
+      schema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          label: { type: "string", enum: ["good", "bad"] },
+          score: { type: "number", minimum: 0, maximum: 1 },
+        },
+        required: ["label", "score"],
+      },
+    };
+
+    expect(() =>
+      normalizeStructuredOutput('{"label":"other","score":2}', format),
+    ).toThrow(StructuredOutputError);
+  });
+
+  it("rejects invalid JSON Schemas before invoking Codex", () => {
+    expect(() =>
+      getResponseTextFormat({
+        text: {
+          format: {
+            type: "json_schema",
+            name: "broken",
+            strict: true,
+            schema: { type: "not-a-json-schema-type" },
+          },
+        },
+      }),
+    ).toThrow(/valid JSON Schema/);
+  });
+
   it("normalizes json_object output and rejects arrays", () => {
     expect(
       normalizeStructuredOutput("prefix {\"ok\":true} suffix", {

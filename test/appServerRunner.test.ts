@@ -99,6 +99,7 @@ describe("app-server Codex runner", () => {
     socket.open();
     await waitUntil(() => socket.sent.length > 0);
     socket.message({ id: "1", result: { userAgent: "codex", codexHome: "C:/home" } });
+    expect(socket.sent[1]).toEqual({ method: "initialized", params: {} });
     socket.message({
       id: "2",
       result: {
@@ -172,6 +173,7 @@ describe("app-server Codex runner", () => {
     socket.open();
     await waitUntil(() => socket.sent.length > 0);
     socket.message({ id: "1", result: { userAgent: "codex", codexHome: "C:/home" } });
+    expect(socket.sent[1]).toEqual({ method: "initialized", params: {} });
     socket.message({
       id: "2",
       result: { thread: { id: "thread-1" }, cwd: "C:/workspace" },
@@ -232,16 +234,15 @@ describe("app-server Codex runner", () => {
     });
 
     socket.message({ id: "1", result: { userAgent: "codex", codexHome: "C:/home" } });
-    expect(socket.sent[1]).toMatchObject({
+    expect(socket.sent[1]).toEqual({ method: "initialized", params: {} });
+    expect(socket.sent[2]).toMatchObject({
       method: "thread/start",
       id: "2",
       params: {
         cwd: "C:/workspace",
-        runtimeWorkspaceRoots: ["C:/workspace"],
         approvalPolicy: "never",
         sandbox: "danger-full-access",
         ephemeral: true,
-        multiAgentMode: "none",
       },
     });
 
@@ -254,7 +255,7 @@ describe("app-server Codex runner", () => {
         cwd: "C:/workspace",
       },
     });
-    expect(socket.sent[2]).toEqual({
+    expect(socket.sent[3]).toEqual({
       method: "turn/start",
       id: "3",
       params: {
@@ -265,7 +266,6 @@ describe("app-server Codex runner", () => {
         effort: "medium",
         approvalPolicy: "never",
         sandboxPolicy: { type: "dangerFullAccess" },
-        multiAgentMode: "none",
       },
     });
 

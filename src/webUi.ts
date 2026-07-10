@@ -3,6 +3,7 @@ export const webUiHtml = `<!doctype html>
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="icon" href="data:," />
   <title>Codex API Tester</title>
   <style>
     :root {
@@ -233,7 +234,9 @@ export const webUiHtml = `<!doctype html>
             </label>
             <label>
               Model
-              <input id="model" name="model" value="gpt-5.4-mini" autocomplete="off" />
+              <select id="model" name="model">
+                <option value="gpt-5.4-mini">gpt-5.4-mini</option>
+              </select>
             </label>
           </div>
 
@@ -249,6 +252,18 @@ export const webUiHtml = `<!doctype html>
 
           <div class="row">
             <label>
+              Reasoning effort
+              <select id="reasoning" name="reasoning">
+                <option value="">API default</option>
+                <option value="low">low</option>
+                <option value="medium">medium</option>
+                <option value="high">high</option>
+                <option value="xhigh">xhigh</option>
+                <option value="max">max</option>
+                <option value="ultra">ultra</option>
+              </select>
+            </label>
+            <label>
               Response format
               <select id="format" name="format">
                 <option value="text">text</option>
@@ -256,11 +271,12 @@ export const webUiHtml = `<!doctype html>
                 <option value="json_schema">json_schema</option>
               </select>
             </label>
-            <label>
-              Timeout seconds
-              <input id="timeout" name="timeout" type="number" min="5" max="240" value="130" />
-            </label>
           </div>
+
+          <label>
+            Timeout seconds
+            <input id="timeout" name="timeout" type="number" min="5" max="240" value="130" />
+          </label>
 
           <label id="schema-label" class="hidden">
             JSON schema
@@ -306,6 +322,7 @@ export const webUiHtml = `<!doctype html>
     const instructions = document.querySelector("#instructions");
     const instructionsLabel = document.querySelector("#instructions-label");
     const promptInput = document.querySelector("#prompt");
+    const reasoning = document.querySelector("#reasoning");
     const format = document.querySelector("#format");
     const timeout = document.querySelector("#timeout");
     const schema = document.querySelector("#schema");
@@ -323,6 +340,7 @@ export const webUiHtml = `<!doctype html>
       model: "gpt-5.4-mini",
       instructions: "Be concise.",
       prompt: "Hello from the local Codex API. Reply with one short sentence.",
+      reasoning: "",
       format: "text",
       timeout: "130",
       schema: schema.value
@@ -330,7 +348,8 @@ export const webUiHtml = `<!doctype html>
 
     endpoint.addEventListener("change", refresh);
     format.addEventListener("change", refresh);
-    model.addEventListener("input", refresh);
+    model.addEventListener("change", refresh);
+    reasoning.addEventListener("change", refresh);
     instructions.addEventListener("input", refresh);
     promptInput.addEventListener("input", refresh);
     schema.addEventListener("input", refresh);
@@ -341,6 +360,7 @@ export const webUiHtml = `<!doctype html>
       model.value = defaults.model;
       instructions.value = defaults.instructions;
       promptInput.value = defaults.prompt;
+      reasoning.value = defaults.reasoning;
       format.value = defaults.format;
       timeout.value = defaults.timeout;
       schema.value = defaults.schema;
@@ -412,15 +432,40 @@ export const webUiHtml = `<!doctype html>
       }
     }
 
+    async function refreshModels() {
+      try {
+        const response = await fetch("/v1/models");
+        const body = await response.json();
+        const models = Array.isArray(body.data) ? body.data : [];
+        const ids = models.map((entry) => entry?.id).filter((id) => typeof id === "string");
+        if (!ids.length) return;
+
+        model.replaceChildren(
+          ...ids.map((id) => {
+            const option = document.createElement("option");
+            option.value = id;
+            option.textContent = id;
+            return option;
+          })
+        );
+        model.value = ids.includes(defaults.model) ? defaults.model : ids[0];
+        refresh();
+      } catch {
+        // Keep the built-in fallback option when discovery is unavailable.
+      }
+    }
+
     function buildBody() {
       const selectedEndpoint = endpoint.value;
       const selectedFormat = format.value;
       const requestModel = model.value.trim();
+      const requestReasoning = reasoning.value;
       const prompt = promptInput.value;
 
       if (selectedEndpoint === "/v1/chat/completions") {
         return {
           ...(requestModel ? { model: requestModel } : {}),
+          ...(requestReasoning ? { reasoning_effort: requestReasoning } : {}),
           messages: [
             ...(instructions.value.trim()
               ? [{ role: "system", content: instructions.value.trim() }]
@@ -432,6 +477,7 @@ export const webUiHtml = `<!doctype html>
 
       const body = {
         ...(requestModel ? { model: requestModel } : {}),
+        ...(requestReasoning ? { reasoning: { effort: requestReasoning } } : {}),
         instructions: instructions.value.trim(),
         input: prompt
       };
@@ -484,6 +530,7 @@ export const webUiHtml = `<!doctype html>
     }
 
     refresh();
+    refreshModels();
     refreshHealth();
   </script>
 </body>

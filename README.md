@@ -5,7 +5,7 @@ A local OpenAI-compatible HTTP wrapper for one-shot Codex prompts.
 By default, the service exposes a small non-streaming subset of the OpenAI API and runs each request through:
 
 ```bash
-codex exec "<prompt>" --skip-git-repo-check --sandbox danger-full-access --dangerously-bypass-approvals-and-sandbox --model <request.model> -c model_reasoning_effort="medium" --ignore-user-config --disable plugins --disable shell_snapshot --ephemeral --ignore-rules
+codex exec - --json --skip-git-repo-check --sandbox danger-full-access --dangerously-bypass-approvals-and-sandbox --model <request.model> -c model_reasoning_effort="medium" --ignore-user-config --disable plugins --disable shell_snapshot --ephemeral --ignore-rules
 ```
 
 For local development, it can also use an experimental warm `codex app-server` backend to avoid spawning `codex exec` for every request.
@@ -41,14 +41,13 @@ Runtime configuration is read from environment variables:
 | `CODEX_IGNORE_RULES` | `true` | Add `--ignore-rules` to skip user/project execpolicy rule loading |
 | `CODEX_TIMEOUT_MS` | `120000` | Per-request Codex timeout |
 | `CODEX_DEFAULT_MODEL` | `gpt-5.4-mini` | Fallback Codex model when request-body `model` is absent or blank |
-| `CODEX_ALLOWED_MODELS` | `gpt-5.4-mini,gpt-5.5,gpt-5.3-codex-spark,gpt-5.4` | Comma- or semicolon-separated model ids accepted from request bodies |
-| `CODEX_REASONING_EFFORT` | `medium` | Reasoning effort passed to Codex calls: `minimal`, `low`, `medium`, `high`, or `xhigh` |
+| `CODEX_ALLOWED_MODELS` | `gpt-5.6-sol,gpt-5.6-terra,gpt-5.6-luna,gpt-5.5,gpt-5.4,gpt-5.4-mini,gpt-5.3-codex-spark` | Comma- or semicolon-separated model ids accepted from request bodies and returned by `/v1/models` |
+| `CODEX_REASONING_EFFORT` | `medium` | Default reasoning effort: `low`, `medium`, `high`, `xhigh`, `max`, or `ultra` |
 | `CODEX_APP_SERVER_URL` | unset | Existing app-server WebSocket URL to use when `CODEX_BACKEND=app-server` |
 | `CODEX_APP_SERVER_PORT` | `0` | Managed app-server port. `0` picks a free local port |
 | `CODEX_APP_SERVER_START_TIMEOUT_MS` | `10000` | Timeout for connecting to app-server |
 | `CODEX_APP_SERVER_DISABLE_APPS` | `true` | Start managed app-server with `--disable apps` |
 | `CODEX_APP_SERVER_DISABLE_NODE_REPL_MCP` | `true` | Start managed app-server with `-c mcp_servers.node_repl.enabled=false` |
-| `OPENAI_COMPAT_MODEL` | `local-codex` | Model name returned by `/v1/models` and compatibility responses. Set this to the default Codex model your clients send if they discover models from the API |
 | `CODEX_CALL_LOGGING` | `false` | Write every chat/responses call to JSONL when set to `true` |
 | `CODEX_CALL_LOG_DIR` | `.codexapi/logs` | Directory for `calls.jsonl` when call logging is enabled |
 
@@ -56,7 +55,6 @@ Example PowerShell setup:
 
 ```powershell
 $env:CODEX_WORKSPACE = "C:\PROJECTS\codexapi"
-$env:OPENAI_COMPAT_MODEL = "gpt-5.4-mini"
 npm run dev
 ```
 
@@ -82,9 +80,9 @@ npm start
 
 Streaming is not supported. Requests with `stream: true` return an OpenAI-style `400` error.
 
-For API-to-Codex calls, the wrapper passes the caller's request-body `model` through to Codex only when it appears in `CODEX_ALLOWED_MODELS`. If `model` is absent or blank, the wrapper falls back to `CODEX_DEFAULT_MODEL`, which defaults to `gpt-5.4-mini`. If a caller provides a model that is not allowlisted, the API returns a 400 `invalid_request_error` with `param: "model"` and does not invoke Codex. With the `exec` backend this becomes `--model <resolved-model>`. With the experimental `app-server` backend this becomes the `model` field on `turn/start`. `CODEX_REASONING_EFFORT` is also passed on every Codex call and defaults to `medium`.
+For API-to-Codex calls, the wrapper passes the caller's request-body `model` through to Codex only when it appears in `CODEX_ALLOWED_MODELS`. If `model` is absent or blank, the wrapper falls back to `CODEX_DEFAULT_MODEL`, which defaults to `gpt-5.4-mini`. If a caller provides a model that is not allowlisted, the API returns a 400 `invalid_request_error` with `param: "model"` and does not invoke Codex. `/v1/models`, response bodies, and call logs all report the same resolved model.
 
-`OPENAI_COMPAT_MODEL` still controls the model id returned from `/v1/models` and compatibility response bodies. If clients discover and send the `/v1/models` value, set `OPENAI_COMPAT_MODEL` to a value that also appears in `CODEX_ALLOWED_MODELS`.
+`CODEX_REASONING_EFFORT` defaults to `medium`. Callers can override it with `reasoning.effort` on `/v1/responses` or `reasoning_effort` on `/v1/chat/completions`. Invalid values return a 400 error before Codex is invoked.
 
 ## Structured Outputs
 
@@ -94,11 +92,11 @@ For API-to-Codex calls, the wrapper passes the caller's request-body `model` thr
 - `{ "type": "json_object" }`
 - `{ "type": "json_schema", "name": "...", "strict": true, "schema": { ... } }`
 
-With the default `exec` backend, structured output is prompt-enforced because `codex exec` does not expose native constrained decoding. The service asks Codex to return only JSON, extracts the first JSON object from the output, validates it, and returns minified JSON in `output_text`.
+With the default `exec` backend, the service writes the schema to a temporary file and passes it through Codex's native `--output-schema` option. The temporary file is removed after the command finishes. The service also extracts the returned JSON, validates it again, and returns minified JSON in `output_text`.
 
 With `CODEX_BACKEND=app-server`, the service also passes `text.format.schema` to `turn/start` as `outputSchema` when a JSON schema is supplied. The same local extraction and validation still runs before the HTTP response is returned.
 
-The `json_schema` validator supports a practical subset: `type`, `properties`, `required`, `items`, `additionalProperties: false`, nested objects, arrays, and primitive string/number/integer/boolean/null types.
+The `json_schema` validator uses Ajv's JSON Schema 2020 implementation, including composition, references, enums, and value constraints.
 
 ## Codex Profiles And Plugins
 
@@ -120,7 +118,7 @@ Each API request opens a WebSocket connection, creates one ephemeral thread, sta
 
 Current caveats:
 
-- `codex app-server` is experimental in Codex CLI 0.142.0.
+- Codex documents the app-server WebSocket transport as experimental.
 - `--ignore-user-config` and `--ignore-rules` are `codex exec` flags, not app-server flags. The managed app-server disables apps, plugins, shell snapshot, and the configured `node_repl` MCP server by default, but it can still load instruction sources from the active Codex home.
 - A fully isolated `CODEX_HOME` prevents inherited instructions and MCP/plugin config, but it also needs a separate auth setup.
 - Call logs show the app-server command or external WebSocket URL instead of a per-request `codex exec "<prompt>"` command.
@@ -129,7 +127,7 @@ Current caveats:
 
 Set `CODEX_CALL_LOGGING=true` to write every `/v1/chat/completions` and `/v1/responses` call to `calls.jsonl` under `CODEX_CALL_LOG_DIR`.
 
-Each log entry includes the request body, generated Codex prompt, Codex command details (`executable`, `args`, `cwd`, and `shell`), raw Codex stdout, raw Codex stderr, normalized output text, duration, status code, and error details when present. This can include sensitive prompt and response data because the command args include the prompt, so keep it disabled outside local debugging.
+Each log entry includes the request body, generated Codex prompt, Codex command details (`executable`, `args`, `cwd`, and `shell`), raw Codex stdout, raw Codex stderr, normalized output text, duration, status code, and error details when present. Exec-backend stdout is Codex JSONL, which also supplies real token usage for compatibility responses. Logs can contain sensitive prompt, tool, and response data, so keep them disabled outside local debugging.
 
 ## Examples
 
@@ -153,6 +151,7 @@ curl http://127.0.0.1:3001/v1/responses \
   -H "Content-Type: application/json" \
   -d '{
     "model": "gpt-5.4-mini",
+    "reasoning": { "effort": "medium" },
     "instructions": "Be concise.",
     "input": "Hello"
   }'
