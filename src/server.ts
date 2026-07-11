@@ -477,7 +477,14 @@ async function main(): Promise<void> {
 }
 
 export function isMainModule(importMetaUrl: string, argvPath: string | undefined): boolean {
-  return Boolean(argvPath && importMetaUrl === pathToFileURL(argvPath).href);
+  if (!argvPath) {
+    return false;
+  }
+
+  const argvUrl = /^[A-Za-z]:[\\/]/.test(argvPath)
+    ? new URL(`file:///${argvPath.replaceAll('\\', '/')}`).href
+    : pathToFileURL(argvPath).href;
+  return importMetaUrl === argvUrl;
 }
 
 if (isMainModule(import.meta.url, process.argv[1])) {

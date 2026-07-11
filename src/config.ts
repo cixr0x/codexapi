@@ -1,4 +1,4 @@
-import { join } from "node:path";
+import { join, win32 } from "node:path";
 
 export type CodexBackend = "exec" | "app-server";
 export const CODEX_REASONING_EFFORTS = [
@@ -111,7 +111,7 @@ export function defaultCodexCommand(
     return {
       command: nodeExecPath,
       args: [
-        join(
+        win32.join(
           env.APPDATA,
           "npm",
           "node_modules",
