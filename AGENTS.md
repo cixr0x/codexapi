@@ -20,6 +20,11 @@ Do not choose another port automatically. If port `3001` is busy, report the own
 - Connect with `gcloud compute ssh robertorojas87@ludora-admin --project ludora-501213 --zone us-central1-c`
 - Admin checkout: `/opt/ludora/ludora-admin`
 - Codex API checkout: `/opt/ludora/codexapi`
+- Public admin URL: `https://admin.ludora.bobbycrimson.com`
+- Admin service unit: `ludora-admin-service.service`, bound to `127.0.0.1:4001`
+- Codex API unit: `codexapi.service`, bound to `127.0.0.1:3001`
+- nginx serves the admin UI and proxies `/api/` to the admin service only.
+- Keep Codex API loopback-only. Never add an nginx route or GCP firewall rule for port `3001`.
 - Run application services as `robertorojas87`.
 - Do not use the automatically created `mcp13` account for deployment or service ownership.
 
