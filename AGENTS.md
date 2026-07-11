@@ -13,6 +13,7 @@ Do not choose another port automatically. If port `3001` is busy, report the own
 
 ## Production VM
 
+- Follow `C:\PROJECTS\ludora\ludora-admin\docs\production-deployment.md` locally or `/opt/ludora/ludora-admin/docs/production-deployment.md` on the VM for provisioning, routine deployment, rollback, and verification.
 - Instance: `ludora-admin`
 - GCP project: `ludora-501213`
 - Zone: `us-central1-c`
