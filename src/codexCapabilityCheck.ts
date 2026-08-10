@@ -62,7 +62,7 @@ export async function assertCodexCapabilities(
     "feature",
     spawn,
   );
-  const shellToolFeature = parseShellToolFeature(featureOutput.stdout);
+  const shellToolFeature = parseDisabledFeatureOutput(featureOutput.stdout);
 
   const mcpOutput = await runProbe(
     command.command,
@@ -292,33 +292,43 @@ function isMinimumVersion(version: { parts: [number, number, number] }): boolean
   return true;
 }
 
-function parseShellToolFeature(output: string): "stable" | "experimental" {
-  const rows = output
-    .split(/\r?\n/)
-    .map((candidate) => candidate.trim().split(/\s+/))
-    .filter(([name]) => name === "shell_tool");
-  if (rows.length === 0) {
+function parseDisabledFeatureOutput(output: string): "stable" | "experimental" {
+  const lines = output.split(/\r?\n/).map((candidate) => candidate.trim());
+  let shellToolFeature: "stable" | "experimental" | undefined;
+
+  for (const expectedName of CODEX_EXECUTION_POLICY.disabledFeatures) {
+    const candidates = lines.filter(
+      (line) => line.split(/\s+/, 1)[0] === expectedName,
+    );
+    if (candidates.length === 0) {
+      throw new Error(`Codex ${expectedName} feature was not reported.`);
+    }
+    if (candidates.length !== 1) {
+      throw new Error(`Codex ${expectedName} feature is incompatible with this policy.`);
+    }
+
+    const match = /^(\S+)\s+(.+?)\s+(true|false)$/.exec(candidates[0]!);
+    if (!match || match[1] !== expectedName) {
+      throw new Error(`Codex ${expectedName} feature is incompatible with this policy.`);
+    }
+    if (match[3] === "true") {
+      throw new Error(
+        `Codex ${expectedName} feature is enabled despite the disable policy.`,
+      );
+    }
+
+    if (expectedName === "shell_tool") {
+      if (match[2] !== "stable" && match[2] !== "experimental") {
+        throw new Error("Codex shell_tool feature is incompatible with this policy.");
+      }
+      shellToolFeature = match[2];
+    }
+  }
+
+  if (shellToolFeature === undefined) {
     throw new Error("Codex shell_tool feature was not reported.");
   }
-  if (rows.length !== 1) {
-    throw new Error("Codex shell_tool feature is incompatible with this policy.");
-  }
-
-  const [name, feature, enabled] = rows[0]!;
-  if (
-    name === "shell_tool" &&
-    (feature === "stable" || feature === "experimental") &&
-    rows[0]!.length === 3
-  ) {
-    if (enabled === "false") {
-      return feature;
-    }
-    if (enabled === "true") {
-      throw new Error("Codex shell_tool feature is enabled despite the disable policy.");
-    }
-  }
-
-  throw new Error("Codex shell_tool feature is incompatible with this policy.");
+  return shellToolFeature;
 }
 
 function tryKill(child: ChildProcess, signal: NodeJS.Signals): void {

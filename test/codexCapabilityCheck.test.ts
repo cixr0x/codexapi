@@ -90,11 +90,37 @@ function testConfig(timeoutMs = 100): {
   };
 }
 
+const DISABLED_FEATURE_OUTPUT = [
+  "shell_tool stable false",
+  "apps stable false",
+  "plugins stable false",
+  "shell_snapshot stable false",
+  "browser_use stable false",
+  "browser_use_external stable false",
+  "browser_use_full_cdp_access stable false",
+  "in_app_browser stable false",
+  "computer_use stable false",
+  "code_mode under development false",
+  "image_generation stable false",
+  "multi_agent stable false",
+  "memories experimental false",
+  "hooks stable false",
+  "tool_suggest stable false",
+  "enable_mcp_apps under development false",
+  "skill_mcp_dependency_install stable false",
+  "tool_call_mcp_elicitation stable false",
+  "code_mode_host stable false",
+  "remote_plugin stable false",
+  "plugin_sharing stable false",
+  "enable_fanout under development false",
+  "workspace_dependencies stable false",
+].join("\n") + "\n";
+
 describe("Codex capability startup check", () => {
   it("accepts the pinned CLI with a recognized shell tool feature and no MCP servers", async () => {
     const spawn = createProbeSpawn([
       { stdout: "codex-cli 0.144.1\n" },
-      { stdout: "shell_tool                           stable             false\n" },
+      { stdout: DISABLED_FEATURE_OUTPUT },
       { stdout: "[]\n" },
     ]);
 
@@ -203,6 +229,38 @@ describe("Codex capability startup check", () => {
     expect(spawn.calls).toHaveLength(2);
   });
 
+  it("rejects any other fixed-disabled feature reported enabled", async () => {
+    const spawn = createProbeSpawn([
+      { stdout: "codex-cli 0.144.1\n" },
+      {
+        stdout: DISABLED_FEATURE_OUTPUT.replace(
+          "computer_use stable false",
+          "computer_use stable true",
+        ),
+      },
+      { stdout: "[]\n" },
+    ]);
+
+    await expect(assertCodexCapabilities(testConfig(), spawn)).rejects.toThrow(
+      /computer_use feature is enabled/i,
+    );
+    expect(spawn.calls).toHaveLength(2);
+  });
+
+  it("rejects a missing fixed-disabled feature row", async () => {
+    const spawn = createProbeSpawn([
+      { stdout: "codex-cli 0.144.1\n" },
+      {
+        stdout: DISABLED_FEATURE_OUTPUT.replace("apps stable false\n", ""),
+      },
+    ]);
+
+    await expect(assertCodexCapabilities(testConfig(), spawn)).rejects.toThrow(
+      /apps feature was not reported/i,
+    );
+    expect(spawn.calls).toHaveLength(2);
+  });
+
   it("fails closed when multibyte probe output exceeds the 64 KiB byte cap", async () => {
     const spawn = createProbeSpawn([
       { stdout: "codex-cli 0.144.1\n" },
@@ -218,7 +276,12 @@ describe("Codex capability startup check", () => {
   it("rejects a nonempty MCP inventory", async () => {
     const spawn = createProbeSpawn([
       { stdout: "codex-cli 0.144.1\n" },
-      { stdout: "shell_tool experimental false\n" },
+      {
+        stdout: DISABLED_FEATURE_OUTPUT.replace(
+          "shell_tool stable false",
+          "shell_tool experimental false",
+        ),
+      },
       { stdout: '[{"name":"unexpected"}]\n' },
     ]);
 

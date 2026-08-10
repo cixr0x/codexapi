@@ -157,7 +157,31 @@ describe("Fastify server", () => {
     child.kill = vi.fn();
     const outputs = [
       "codex-cli 0.144.1\n",
-      "shell_tool stable false\n",
+      [
+        "shell_tool stable false",
+        "apps stable false",
+        "plugins stable false",
+        "shell_snapshot stable false",
+        "browser_use stable false",
+        "browser_use_external stable false",
+        "browser_use_full_cdp_access stable false",
+        "in_app_browser stable false",
+        "computer_use stable false",
+        "code_mode under development false",
+        "image_generation stable false",
+        "multi_agent stable false",
+        "memories experimental false",
+        "hooks stable false",
+        "tool_suggest stable false",
+        "enable_mcp_apps under development false",
+        "skill_mcp_dependency_install stable false",
+        "tool_call_mcp_elicitation stable false",
+        "code_mode_host stable false",
+        "remote_plugin stable false",
+        "plugin_sharing stable false",
+        "enable_fanout under development false",
+        "workspace_dependencies stable false",
+      ].join("\n") + "\n",
       "[]\n",
     ];
     const spawn = vi.fn(() => {
