@@ -261,6 +261,24 @@ describe("Codex capability startup check", () => {
     expect(spawn.calls).toHaveLength(2);
   });
 
+  it("rejects a malformed fixed-disabled feature maturity column", async () => {
+    const spawn = createProbeSpawn([
+      { stdout: "codex-cli 0.144.1\n" },
+      {
+        stdout: DISABLED_FEATURE_OUTPUT.replace(
+          "computer_use stable false",
+          "computer_use stable true false",
+        ),
+      },
+      { stdout: "[]\n" },
+    ]);
+
+    await expect(assertCodexCapabilities(testConfig(), spawn)).rejects.toThrow(
+      /computer_use feature is incompatible/i,
+    );
+    expect(spawn.calls).toHaveLength(2);
+  });
+
   it("fails closed when multibyte probe output exceeds the 64 KiB byte cap", async () => {
     const spawn = createProbeSpawn([
       { stdout: "codex-cli 0.144.1\n" },

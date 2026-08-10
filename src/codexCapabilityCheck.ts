@@ -294,6 +294,11 @@ function isMinimumVersion(version: { parts: [number, number, number] }): boolean
 
 function parseDisabledFeatureOutput(output: string): "stable" | "experimental" {
   const lines = output.split(/\r?\n/).map((candidate) => candidate.trim());
+  const recognizedMaturities = new Set([
+    "stable",
+    "experimental",
+    "under development",
+  ]);
   let shellToolFeature: "stable" | "experimental" | undefined;
 
   for (const expectedName of CODEX_EXECUTION_POLICY.disabledFeatures) {
@@ -309,6 +314,9 @@ function parseDisabledFeatureOutput(output: string): "stable" | "experimental" {
 
     const match = /^(\S+)\s+(.+?)\s+(true|false)$/.exec(candidates[0]!);
     if (!match || match[1] !== expectedName) {
+      throw new Error(`Codex ${expectedName} feature is incompatible with this policy.`);
+    }
+    if (!recognizedMaturities.has(match[2]!)) {
       throw new Error(`Codex ${expectedName} feature is incompatible with this policy.`);
     }
     if (match[3] === "true") {
