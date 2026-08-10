@@ -128,6 +128,7 @@ async function waitUntil(condition: () => boolean): Promise<void> {
 function jsonlCompletion(text: string): string {
   return [
     JSON.stringify({ type: "thread.started", thread_id: "thread-1" }),
+    JSON.stringify({ type: "turn.started" }),
     JSON.stringify({
       type: "item.completed",
       item: { id: "item-1", type: "agent_message", text },
@@ -158,7 +159,7 @@ describe("Codex runner", () => {
     });
 
     const resultPromise = runner.run("Hello");
-    child.stdout.push("Hi\n");
+    child.stdout.push(`${jsonlCompletion("Hi")}\n`);
     child.close(0);
 
     await expect(resultPromise).resolves.toBe("Hi");
@@ -196,15 +197,22 @@ describe("Codex runner", () => {
     });
 
     expect(runner.runWithDetails).toBeDefined();
+    const rawStdout = jsonlCompletion("OK");
     const resultPromise = runner.runWithDetails!("Hello");
-    child.stdout.push("OK\n");
+    child.stdout.push(`${rawStdout}\n`);
     child.stderr.push("skill loader warning\n");
     child.close(0);
 
     await expect(resultPromise).resolves.toEqual({
       stdout: "OK",
-      rawStdout: "OK",
+      rawStdout,
       stderr: "skill loader warning",
+      usage: {
+        inputTokens: 21,
+        cachedInputTokens: 8,
+        outputTokens: 5,
+        reasoningOutputTokens: 2,
+      },
       command: {
         executable: "codex",
         args: SAFE_DEFAULT_EXEC_ARGS,
@@ -228,7 +236,7 @@ describe("Codex runner", () => {
     const largePrompt = "classify ".repeat(20_000);
 
     const resultPromise = runner.runWithDetails!(largePrompt);
-    child.stdout.push("OK\n");
+    child.stdout.push(`${jsonlCompletion("OK")}\n`);
     child.close(0);
 
     await expect(resultPromise).resolves.toMatchObject({
@@ -264,7 +272,7 @@ describe("Codex runner", () => {
       model: "gpt-5.4-mini",
       reasoningEffort: "medium",
     });
-    child.stdout.push("OK\n");
+    child.stdout.push(`${jsonlCompletion("OK")}\n`);
     child.close(0);
 
     await expect(resultPromise).resolves.toMatchObject({ stdout: "OK" });
@@ -308,7 +316,7 @@ describe("Codex runner", () => {
 
     try {
       const resultPromise = runner.run("Hello");
-      child.stdout.push("OK\n");
+      child.stdout.push(`${jsonlCompletion("OK")}\n`);
       child.close(0);
       await expect(resultPromise).resolves.toBe("OK");
 
@@ -347,7 +355,7 @@ describe("Codex runner", () => {
     });
 
     const resultPromise = runner.runWithDetails!("Hello", { webSearch: false });
-    child.stdout.push("OK\n");
+    child.stdout.push(`${jsonlCompletion("OK")}\n`);
     child.close(0);
 
     await expect(resultPromise).resolves.toMatchObject({ stdout: "OK" });
@@ -366,7 +374,7 @@ describe("Codex runner", () => {
     });
 
     const resultPromise = runner.runWithDetails!("Hello", { webSearch: true });
-    child.stdout.push("OK\n");
+    child.stdout.push(`${jsonlCompletion("OK")}\n`);
     child.close(0);
 
     await expect(resultPromise).resolves.toMatchObject({ stdout: "OK" });
@@ -395,7 +403,7 @@ describe("Codex runner", () => {
     ];
 
     const resultPromise = runner.runWithDetails!("Hello", { imagePaths });
-    child.stdout.push("OK\n");
+    child.stdout.push(`${jsonlCompletion("OK")}\n`);
     child.close(0);
 
     await expect(resultPromise).resolves.toMatchObject({ stdout: "OK" });
@@ -524,6 +532,240 @@ describe("Codex runner", () => {
       code: "SPAWN_ERROR",
     });
   });
+
+  it.each(["command_execution", "image_view"])(
+    "rejects a forbidden %s item even when a later agent message completes",
+    async (itemType) => {
+      const child = new FakeChildProcess();
+      const spawn = createFakeSpawn(child);
+      const runner = createCodexRunner({
+        command: "codex",
+        workspace: "C:/workspace",
+        codexHome: TEST_CODEX_HOME,
+        timeoutMs: 1000,
+        spawn,
+      });
+      const rawStdout = [
+        JSON.stringify({ type: "thread.started", thread_id: "thread-1" }),
+        JSON.stringify({ type: "turn.started" }),
+        JSON.stringify({
+          type: "item.completed",
+          item: { id: "item-forbidden", type: itemType },
+        }),
+        JSON.stringify({
+          type: "item.completed",
+          item: { id: "item-message", type: "agent_message", text: "concealed" },
+        }),
+        JSON.stringify({ type: "turn.completed", usage: {} }),
+      ].join("\n");
+
+      const resultPromise = runner.runWithDetails!("Hello", { webSearch: false });
+      child.stdout.push(`${rawStdout}\n`);
+      child.close(0);
+
+      await expect(resultPromise).rejects.toMatchObject({
+        name: "CodexRunnerError",
+        code: "INVALID_OUTPUT",
+      });
+    },
+  );
+
+  it("rejects a web-search item when the request did not opt in", async () => {
+    const child = new FakeChildProcess();
+    const spawn = createFakeSpawn(child);
+    const runner = createCodexRunner({
+      command: "codex",
+      workspace: "C:/workspace",
+      codexHome: TEST_CODEX_HOME,
+      timeoutMs: 1000,
+      spawn,
+    });
+    const rawStdout = [
+      JSON.stringify({ type: "thread.started", thread_id: "thread-1" }),
+      JSON.stringify({ type: "turn.started" }),
+      JSON.stringify({
+        type: "item.started",
+        item: { id: "item-search", type: "web_search", query: "Coffee Rush BGG" },
+      }),
+      JSON.stringify({
+        type: "item.updated",
+        item: { id: "item-search", type: "web_search", query: "Coffee Rush BGG" },
+      }),
+      JSON.stringify({
+        type: "item.completed",
+        item: { id: "item-search", type: "web_search", query: "Coffee Rush BGG" },
+      }),
+      JSON.stringify({
+        type: "item.completed",
+        item: { id: "item-message", type: "agent_message", text: "concealed" },
+      }),
+      JSON.stringify({ type: "turn.completed", usage: {} }),
+    ].join("\n");
+
+    const resultPromise = runner.runWithDetails!("Hello", { webSearch: false });
+    child.stdout.push(`${rawStdout}\n`);
+    child.close(0);
+
+    await expect(resultPromise).rejects.toMatchObject({
+      name: "CodexRunnerError",
+      code: "INVALID_OUTPUT",
+    });
+  });
+
+  it("accepts web-search items only when the request opted in", async () => {
+    const child = new FakeChildProcess();
+    const spawn = createFakeSpawn(child);
+    const runner = createCodexRunner({
+      command: "codex",
+      workspace: "C:/workspace",
+      codexHome: TEST_CODEX_HOME,
+      timeoutMs: 1000,
+      spawn,
+    });
+    const rawStdout = [
+      JSON.stringify({ type: "thread.started", thread_id: "thread-1" }),
+      JSON.stringify({ type: "turn.started" }),
+      JSON.stringify({
+        type: "item.started",
+        item: { id: "item-search", type: "web_search", query: "Coffee Rush BGG" },
+      }),
+      JSON.stringify({
+        type: "item.updated",
+        item: { id: "item-search", type: "web_search", query: "Coffee Rush BGG" },
+      }),
+      JSON.stringify({
+        type: "item.completed",
+        item: { id: "item-search", type: "web_search", query: "Coffee Rush BGG" },
+      }),
+      JSON.stringify({
+        type: "item.completed",
+        item: { id: "item-message", type: "agent_message", text: "Coffee Rush" },
+      }),
+      JSON.stringify({ type: "turn.completed", usage: {} }),
+    ].join("\n");
+
+    const resultPromise = runner.runWithDetails!("Hello", { webSearch: true });
+    child.stdout.push(`${rawStdout}\n`);
+    child.close(0);
+
+    await expect(resultPromise).resolves.toMatchObject({ stdout: "Coffee Rush" });
+  });
+
+  it.each(["error", "turn.failed"])(
+    "rejects a top-level %s event even when a later agent message completes",
+    async (eventType) => {
+      const child = new FakeChildProcess();
+      const spawn = createFakeSpawn(child);
+      const runner = createCodexRunner({
+        command: "codex",
+        workspace: "C:/workspace",
+        codexHome: TEST_CODEX_HOME,
+        timeoutMs: 1000,
+        spawn,
+      });
+      const rawStdout = [
+        JSON.stringify({ type: "thread.started", thread_id: "thread-1" }),
+        JSON.stringify({ type: "turn.started" }),
+        JSON.stringify({ type: eventType, message: "failed" }),
+        JSON.stringify({
+          type: "item.completed",
+          item: { id: "item-message", type: "agent_message", text: "concealed" },
+        }),
+        JSON.stringify({ type: "turn.completed", usage: {} }),
+      ].join("\n");
+
+      const resultPromise = runner.runWithDetails!("Hello");
+      child.stdout.push(`${rawStdout}\n`);
+      child.close(0);
+
+      await expect(resultPromise).rejects.toMatchObject({
+        name: "CodexRunnerError",
+        code: "INVALID_OUTPUT",
+      });
+    },
+  );
+
+  it("rejects any event after the terminal turn completion", async () => {
+    const child = new FakeChildProcess();
+    const spawn = createFakeSpawn(child);
+    const runner = createCodexRunner({
+      command: "codex",
+      workspace: "C:/workspace",
+      codexHome: TEST_CODEX_HOME,
+      timeoutMs: 1000,
+      spawn,
+    });
+    const rawStdout = [
+      jsonlCompletion("early answer"),
+      JSON.stringify({
+        type: "item.completed",
+        item: { id: "item-forbidden", type: "command_execution" },
+      }),
+    ].join("\n");
+
+    const resultPromise = runner.runWithDetails!("Hello");
+    child.stdout.push(`${rawStdout}\n`);
+    child.close(0);
+
+    await expect(resultPromise).rejects.toMatchObject({
+      name: "CodexRunnerError",
+      code: "INVALID_OUTPUT",
+    });
+  });
+
+  it("rejects successful non-JSONL output instead of returning raw stdout", async () => {
+    const child = new FakeChildProcess();
+    const spawn = createFakeSpawn(child);
+    const runner = createCodexRunner({
+      command: "codex",
+      workspace: "C:/workspace",
+      codexHome: TEST_CODEX_HOME,
+      timeoutMs: 1000,
+      spawn,
+    });
+
+    const resultPromise = runner.runWithDetails!("Hello");
+    child.stdout.push("unverified raw output\n");
+    child.close(0);
+
+    await expect(resultPromise).rejects.toMatchObject({
+      name: "CodexRunnerError",
+      code: "INVALID_OUTPUT",
+    });
+  });
+
+  it.each(["stdout", "stderr"])(
+    "rejects a successful run when bounded %s output overflowed",
+    async (streamName) => {
+      const child = new FakeChildProcess();
+      const spawn = createFakeSpawn(child);
+      const rawStdout = jsonlCompletion("early valid answer");
+      const runner = createCodexRunner({
+        command: "codex",
+        workspace: "C:/workspace",
+        codexHome: TEST_CODEX_HOME,
+        timeoutMs: 1000,
+        maxOutputBytes: Buffer.byteLength(rawStdout, "utf8"),
+        spawn,
+      });
+
+      const resultPromise = runner.runWithDetails!("Hello");
+      child.stdout.push(rawStdout);
+      if (streamName === "stdout") {
+        child.stdout.push("\u{1f510}");
+      } else {
+        child.stderr.push(
+          "\u{1f510}".repeat(Buffer.byteLength(rawStdout, "utf8")),
+        );
+      }
+      child.close(0);
+
+      await expect(resultPromise).rejects.toMatchObject({
+        name: "CodexRunnerError",
+        code: "INVALID_OUTPUT",
+      });
+    },
+  );
 
   it("rejects an already-cancelled run without spawning Codex", async () => {
     const controller = new AbortController();

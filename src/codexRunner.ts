@@ -112,6 +112,12 @@ interface ParsedCodexOutput {
   usage?: CodexUsage;
 }
 
+interface BoundedOutput {
+  chunks: Buffer[];
+  byteLength: number;
+  exceeded: boolean;
+}
+
 export function createCodexRunner(config: CodexRunnerConfig): CodexRunner {
   return {
     async run(prompt: string) {
@@ -233,8 +239,8 @@ function runCodexProcess(
   };
 
   return new Promise((resolve, reject) => {
-    let stdout = "";
-    let stderr = "";
+    const stdout = createBoundedOutput();
+    const stderr = createBoundedOutput();
     let settled = false;
     let fatalSettlement = false;
     let termination: "TIMEOUT" | "CANCELLED" | undefined;
@@ -253,10 +259,10 @@ function runCodexProcess(
       env: createCodexChildEnvironment(codexHome),
     });
     const onStdout = (chunk: Buffer | string) => {
-      stdout = appendBounded(stdout, chunk, maxOutputBytes);
+      appendBounded(stdout, chunk, maxOutputBytes);
     };
     const onStderr = (chunk: Buffer | string) => {
-      stderr = appendBounded(stderr, chunk, maxOutputBytes);
+      appendBounded(stderr, chunk, maxOutputBytes);
     };
     const onChildError = (error: Error) => {
       if (termination) {
@@ -267,8 +273,8 @@ function runCodexProcess(
           new CodexRunnerError({
             message: `Failed to start Codex command: ${error.message}`,
             code: "SPAWN_ERROR",
-            stdout: stdout.trimEnd(),
-            stderr: stderr.trimEnd(),
+            stdout: readBoundedOutput(stdout).trimEnd(),
+            stderr: readBoundedOutput(stderr).trimEnd(),
             command: commandDetails,
           }),
         );
@@ -276,8 +282,8 @@ function runCodexProcess(
     };
     const settleAfterVerifiedTermination = () => {
       settle(() => {
-        const rawStdout = stdout.trimEnd();
-        const finalStderr = stderr.trimEnd();
+        const rawStdout = readBoundedOutput(stdout).trimEnd();
+        const finalStderr = readBoundedOutput(stderr).trimEnd();
 
         if (termination === "CANCELLED") {
           reject(
@@ -314,8 +320,8 @@ function runCodexProcess(
       }
 
       settle(() => {
-        const rawStdout = stdout.trimEnd();
-        const finalStderr = stderr.trimEnd();
+        const rawStdout = readBoundedOutput(stdout).trimEnd();
+        const finalStderr = readBoundedOutput(stderr).trimEnd();
 
         if (code !== 0) {
           reject(
@@ -331,8 +337,21 @@ function runCodexProcess(
           return;
         }
 
+        if (stdout.exceeded || stderr.exceeded) {
+          reject(
+            new CodexRunnerError({
+              message: "Codex output exceeded the configured byte limit.",
+              code: "INVALID_OUTPUT",
+              stdout: rawStdout,
+              stderr: finalStderr,
+              command: commandDetails,
+            }),
+          );
+          return;
+        }
+
         try {
-          const parsed = parseCodexOutput(rawStdout);
+          const parsed = parseCodexOutput(rawStdout, options.webSearch === true);
           resolve({
             stdout: parsed.output,
             rawStdout,
@@ -389,8 +408,8 @@ function runCodexProcess(
           new CodexRunnerError({
             message: "Codex process could not be terminated.",
             code: "TERMINATION_FAILED",
-            stdout: stdout.trimEnd(),
-            stderr: stderr.trimEnd(),
+            stdout: readBoundedOutput(stdout).trimEnd(),
+            stderr: readBoundedOutput(stderr).trimEnd(),
             command: commandDetails,
             childMayBeRunning: true,
             cleanupWhenSafe,
@@ -517,38 +536,90 @@ export function createCodexChildEnvironment(
   return environment;
 }
 
-function parseCodexOutput(rawStdout: string): ParsedCodexOutput {
+function parseCodexOutput(
+  rawStdout: string,
+  webSearchAllowed: boolean,
+): ParsedCodexOutput {
   const messages: string[] = [];
   let usage: CodexUsage | undefined;
-  let sawJsonlEvent = false;
+  let phase: "thread" | "turn" | "active" | "completed" = "thread";
 
   for (const line of rawStdout.split(/\r?\n/)) {
+    if (!line.trim()) {
+      continue;
+    }
     const event = parseRecord(line);
     if (!event || typeof event.type !== "string") {
-      continue;
+      throw new Error("Codex output contained a malformed JSONL event.");
+    }
+    if (phase === "completed") {
+      throw new Error("Codex JSONL output continued after turn completion.");
     }
 
-    sawJsonlEvent = true;
-    if (event.type === "item.completed") {
-      const item = isRecord(event.item) ? event.item : undefined;
-      if (item?.type === "agent_message" && typeof item.text === "string") {
-        messages.push(item.text);
+    if (event.type === "thread.started") {
+      if (
+        phase !== "thread" ||
+        typeof event.thread_id !== "string" ||
+        !event.thread_id.trim()
+      ) {
+        throw new Error("Codex JSONL output contained an invalid thread start.");
       }
+      phase = "turn";
       continue;
     }
 
-    if (event.type === "turn.completed" && isRecord(event.usage)) {
+    if (event.type === "turn.started") {
+      if (phase !== "turn") {
+        throw new Error("Codex JSONL output contained an invalid turn start.");
+      }
+      phase = "active";
+      continue;
+    }
+
+    if (
+      event.type === "item.started" ||
+      event.type === "item.updated" ||
+      event.type === "item.completed"
+    ) {
+      if (phase !== "active" || !isRecord(event.item)) {
+        throw new Error("Codex JSONL output contained an invalid item event.");
+      }
+      const itemType = event.item.type;
+      if (itemType === "agent_message") {
+        if (event.type !== "item.completed" || typeof event.item.text !== "string") {
+          throw new Error("Codex JSONL output contained an invalid agent message.");
+        }
+        messages.push(event.item.text);
+        continue;
+      }
+      if (itemType === "reasoning") {
+        continue;
+      }
+      if (itemType === "web_search" && webSearchAllowed) {
+        continue;
+      }
+      throw new Error("Codex JSONL output contained a forbidden item type.");
+    }
+
+    if (event.type === "turn.completed") {
+      if (phase !== "active" || !isRecord(event.usage)) {
+        throw new Error("Codex JSONL output contained an invalid turn completion.");
+      }
       usage = {
         inputTokens: readTokenCount(event.usage.input_tokens),
         cachedInputTokens: readTokenCount(event.usage.cached_input_tokens),
         outputTokens: readTokenCount(event.usage.output_tokens),
         reasoningOutputTokens: readTokenCount(event.usage.reasoning_output_tokens),
       };
+      phase = "completed";
+      continue;
     }
+
+    throw new Error("Codex JSONL output contained an unsupported event type.");
   }
 
-  if (!sawJsonlEvent) {
-    return { output: rawStdout };
+  if (phase !== "completed") {
+    throw new Error("Codex JSONL output did not contain a completed turn.");
   }
 
   const output = messages.at(-1);
@@ -589,19 +660,28 @@ function tomlString(value: string): string {
   return `"${value.replaceAll("\\", "\\\\").replaceAll("\"", "\\\"")}"`;
 }
 
+function createBoundedOutput(): BoundedOutput {
+  return { chunks: [], byteLength: 0, exceeded: false };
+}
+
 function appendBounded(
-  current: string,
+  output: BoundedOutput,
   chunk: Buffer | string,
   maxOutputBytes: number,
-): string {
-  if (Buffer.byteLength(current, "utf8") >= maxOutputBytes) {
-    return current;
+): void {
+  const bytes = Buffer.isBuffer(chunk) ? Buffer.from(chunk) : Buffer.from(chunk, "utf8");
+  const remaining = Math.max(0, maxOutputBytes - output.byteLength);
+  if (bytes.byteLength > remaining) {
+    output.exceeded = true;
   }
-
-  const next = current + chunk.toString();
-  if (Buffer.byteLength(next, "utf8") <= maxOutputBytes) {
-    return next;
+  if (remaining === 0) {
+    return;
   }
+  const bounded = bytes.byteLength <= remaining ? bytes : bytes.subarray(0, remaining);
+  output.chunks.push(bounded);
+  output.byteLength += bounded.byteLength;
+}
 
-  return next.slice(0, maxOutputBytes);
+function readBoundedOutput(output: BoundedOutput): string {
+  return Buffer.concat(output.chunks, output.byteLength).toString("utf8");
 }
