@@ -1,5 +1,9 @@
 import cors from "@fastify/cors";
-import Fastify, { type FastifyInstance, type FastifyReply } from "fastify";
+import Fastify, {
+  type FastifyInstance,
+  type FastifyReply,
+  type FastifyRequest,
+} from "fastify";
 import { randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
 
@@ -28,6 +32,13 @@ import {
   openAiError,
 } from "./openaiCompat.js";
 import {
+  emptyPreparedRemoteImage,
+  prepareRemoteImage as defaultPrepareRemoteImage,
+  type PreparedRemoteImage,
+  type SafeImageReason,
+  type SafeRemoteImageDependencies,
+} from "./safeRemoteImage.js";
+import {
   StructuredOutputError,
   type ResponseTextFormat,
   getResponseTextFormat,
@@ -39,6 +50,11 @@ export interface CreateServerOptions {
   config?: AppConfig;
   runner?: CodexRunner;
   logger?: boolean;
+  prepareRemoteImage?: (
+    url: string,
+    dependencies?: SafeRemoteImageDependencies,
+  ) => Promise<PreparedRemoteImage>;
+  requestSignal?: (request: FastifyRequest) => AbortSignal;
 }
 
 export function createServer(options: CreateServerOptions = {}): FastifyInstance {
@@ -48,6 +64,8 @@ export function createServer(options: CreateServerOptions = {}): FastifyInstance
     enabled: config.callLoggingEnabled,
     logDir: config.callLogDir,
   });
+  const prepareRemoteImage = options.prepareRemoteImage ?? defaultPrepareRemoteImage;
+  const requestSignal = options.requestSignal ?? ((request: FastifyRequest) => request.signal);
 
   const app = Fastify({ logger: options.logger ?? false });
 
@@ -161,6 +179,9 @@ export function createServer(options: CreateServerOptions = {}): FastifyInstance
     let selectedModel: string | undefined;
     let reasoningEffort: string | undefined;
     let webSearchEnabled = false;
+    let imageDiagnosticCode: "none" | SafeImageReason = "none";
+    let preparedImage = emptyPreparedRemoteImage();
+    const disconnectSignal = requestSignal(request);
 
     try {
       const normalizedRequest = normalizeResponsesRequest(request.body);
@@ -175,6 +196,14 @@ export function createServer(options: CreateServerOptions = {}): FastifyInstance
       selectedModel = codexOptions.model ?? config.codexDefaultModel;
       reasoningEffort = codexOptions.reasoningEffort;
       webSearchEnabled = normalizedRequest.webSearch;
+      if (normalizedRequest.imageUrl !== null) {
+        preparedImage = await prepareRemoteImage(normalizedRequest.imageUrl, {
+          signal: disconnectSignal,
+        });
+      }
+      imageDiagnosticCode = preparedImage.reason ?? "none";
+      codexOptions.imagePaths = preparedImage.path ? [preparedImage.path] : [];
+      codexOptions.signal = disconnectSignal;
       runResult = await runPromptWithDetails(runner, prompt, codexOptions);
       outputText = normalizeStructuredOutput(runResult.stdout, format);
       const responseBody = createResponse({
@@ -197,7 +226,7 @@ export function createServer(options: CreateServerOptions = {}): FastifyInstance
         rawStderr: runResult.stderr,
         outputText,
         webSearchEnabled,
-        imageDiagnosticCode: "none",
+        imageDiagnosticCode,
         statusCode: 200,
       });
       return responseBody;
@@ -217,12 +246,18 @@ export function createServer(options: CreateServerOptions = {}): FastifyInstance
         rawStderr: runResult?.stderr ?? runnerErrorStderr(error),
         outputText,
         webSearchEnabled,
-        imageDiagnosticCode: "none",
+        imageDiagnosticCode,
         statusCode: mappedError.statusCode,
         error: mappedError.body.error,
       });
       sendOpenAIError(reply, mappedError);
       return undefined;
+    } finally {
+      try {
+        await preparedImage.cleanup();
+      } catch {
+        // Attachment cleanup must never change the API response.
+      }
     }
   });
 
@@ -235,6 +270,16 @@ function mapError(error: unknown): OpenAIHttpError {
   }
 
   if (error instanceof CodexRunnerError) {
+    if (error.code === "CANCELLED") {
+      return openAiError(
+        "Request was cancelled.",
+        "api_error",
+        null,
+        "request_cancelled",
+        499,
+      );
+    }
+
     return openAiError(
       codexErrorMessage(error),
       "api_error",
@@ -404,7 +449,8 @@ function hasCodexRunOptions(options: CodexRunOptions): boolean {
     options.reasoningEffort !== undefined ||
     options.outputSchema !== undefined ||
     options.webSearch !== undefined ||
-    options.imagePaths !== undefined
+    options.imagePaths !== undefined ||
+    options.signal !== undefined
   );
 }
 

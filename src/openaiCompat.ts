@@ -8,6 +8,7 @@ import {
 } from "./structuredOutput.js";
 
 type JsonRecord = Record<string, unknown>;
+type InputImagePart = JsonRecord & { type: "input_image" };
 
 export type OpenAIErrorType =
   | "invalid_request_error"
@@ -86,6 +87,7 @@ export function buildChatPrompt(body: unknown): string {
       );
     }
 
+    rejectChatImageContent(record.content);
     return `${role}: ${formatContent(record.content)}`;
   });
 
@@ -122,7 +124,8 @@ export function normalizeResponsesRequest(body: unknown): NormalizedResponsesReq
     lines.push(`instructions: ${request.instructions}`);
   }
 
-  lines.push(...formatResponseInput(request.input));
+  const formattedInput = formatResponseInput(request.input);
+  lines.push(...formattedInput.lines);
   const format = getResponseTextFormat(request);
   if (format) {
     lines.push(buildStructuredOutputInstructions(format));
@@ -131,7 +134,7 @@ export function normalizeResponsesRequest(body: unknown): NormalizedResponsesReq
   return {
     prompt: lines.join("\n"),
     webSearch,
-    imageUrl: null,
+    imageUrl: formattedInput.imageUrl,
   };
 }
 
@@ -312,16 +315,23 @@ function parseWebSearch(body: JsonRecord): boolean {
   return true;
 }
 
-function formatResponseInput(input: unknown): string[] {
+function formatResponseInput(input: unknown): {
+  lines: string[];
+  imageUrl: string | null;
+} {
   if (typeof input === "string") {
-    return [`input: ${input}`];
+    return { lines: [`input: ${input}`], imageUrl: null };
   }
 
   if (!Array.isArray(input)) {
-    return [`input: ${formatContent(input)}`];
+    if (containsInputImageSyntax(input)) {
+      throw invalidInputImageError();
+    }
+    return { lines: [`input: ${formatContent(input)}`], imageUrl: null };
   }
 
-  return input.map((item, index) => {
+  let imageUrl: string | null = null;
+  const lines = input.map((item, index) => {
     if (typeof item === "string") {
       return `input: ${item}`;
     }
@@ -331,11 +341,95 @@ function formatResponseInput(input: unknown): string[] {
       `input[${index}] must be a string or JSON object.`,
       "input",
     );
-    const content = formatContent(record.content ?? record.text ?? record);
+    if (!Array.isArray(record.content) && containsInputImageSyntax(record)) {
+      throw invalidInputImageError();
+    }
+    const rawContent = record.content ?? record.text ?? record;
+    const content = Array.isArray(record.content)
+      ? record.content.map((part) => formatResponseContentPart(part, () => imageUrl, (url) => {
+          imageUrl = url;
+        })).filter(Boolean).join("\n")
+      : formatContent(rawContent);
     return typeof record.role === "string" && record.role !== ""
       ? `${record.role}: ${content}`
       : content;
   });
+
+  return { lines, imageUrl };
+}
+
+function formatResponseContentPart(
+  part: unknown,
+  currentImageUrl: () => string | null,
+  setImageUrl: (url: string) => void,
+): string {
+  if (!isInputImagePart(part)) {
+    if (containsInputImageSyntax(part)) {
+      throw invalidInputImageError();
+    }
+    return formatContentPart(part);
+  }
+
+  if (
+    typeof part.image_url !== "string" ||
+    Object.prototype.hasOwnProperty.call(part, "file_id")
+  ) {
+    throw invalidInputImageError();
+  }
+  if (currentImageUrl() !== null) {
+    throw openAiError(
+      "Responses requests support at most one input_image.",
+      "invalid_request_error",
+      "input",
+      "multiple_input_images",
+    );
+  }
+
+  setImageUrl(part.image_url);
+  return `[store cover attached when available]\nimage_url: ${part.image_url}`;
+}
+
+function rejectChatImageContent(content: unknown): void {
+  if (containsInputImageSyntax(content)) {
+    throw openAiError(
+      "Chat completion image inputs are not supported.",
+      "invalid_request_error",
+      "messages",
+      "unsupported_chat_image",
+    );
+  }
+}
+
+function invalidInputImageError(): OpenAIHttpError {
+  return openAiError(
+    "input_image must appear in Responses message content and use a string image_url.",
+    "invalid_request_error",
+    "input",
+    "invalid_input_image",
+  );
+}
+
+function isInputImagePart(value: unknown): value is InputImagePart {
+  return isRecord(value) && value.type === "input_image";
+}
+
+function containsInputImageSyntax(value: unknown): boolean {
+  const pending: unknown[] = [value];
+  const visited = new Set<object>();
+
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (isInputImagePart(current)) {
+      return true;
+    }
+    if (typeof current !== "object" || current === null || visited.has(current)) {
+      continue;
+    }
+    visited.add(current);
+    pending.push(...(Array.isArray(current) ? current : Object.values(current)));
+  }
+
+  return false;
 }
 
 function formatContent(content: unknown): string {

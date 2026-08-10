@@ -5,6 +5,11 @@ import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { CodexRunnerError, type CodexRunner } from "../src/codexRunner.js";
+import type {
+  PreparedRemoteImage,
+  SafeImageReason,
+  SafeRemoteImageDependencies,
+} from "../src/safeRemoteImage.js";
 import { createServer, isMainModule } from "../src/server.js";
 
 const responseSchema = {
@@ -51,6 +56,21 @@ function fakeDetailedRunner(stdout = "Codex output", stderr = "skill loaded") {
     },
   }));
   return { runner: { run, runWithDetails }, run, runWithDetails };
+}
+
+function fakeImagePreparer({
+  path,
+  reason = null,
+}: {
+  path: string | null;
+  reason?: SafeImageReason | null;
+}) {
+  const cleanup = vi.fn(async () => undefined);
+  const prepared: PreparedRemoteImage = { path, reason, cleanup };
+  const prepareRemoteImage = vi.fn(
+    async (_url: string, _dependencies?: SafeRemoteImageDependencies) => prepared,
+  );
+  return { cleanup, prepareRemoteImage };
 }
 
 function testConfig() {
@@ -222,6 +242,7 @@ describe("Fastify server", () => {
       reasoningEffort: "medium",
       webSearch: false,
       imagePaths: [],
+      signal: expect.any(AbortSignal),
     });
     await app.close();
   });
@@ -246,7 +267,430 @@ describe("Fastify server", () => {
       reasoningEffort: "medium",
       webSearch: true,
       imagePaths: [],
+      signal: expect.any(AbortSignal),
     });
+    await app.close();
+  });
+
+  it("attaches one safely prepared Responses image and cleans it after success", async () => {
+    const imageUrl = "https://images.example.test/store-cover.png";
+    const imagePath = "C:\\safe-temp\\codexapi-image-random\\image.png";
+    const image = fakeImagePreparer({ path: imagePath });
+    const { runner, runWithDetails } = fakeDetailedRunner("Response from Codex");
+    const app = createServer({
+      config: testConfig(),
+      runner,
+      prepareRemoteImage: image.prepareRemoteImage,
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/responses",
+      payload: {
+        model: "gpt-5.5",
+        input: [
+          {
+            role: "user",
+            content: [
+              { type: "input_text", text: "Find this game by name and cover." },
+              { type: "input_image", image_url: imageUrl, detail: "high" },
+            ],
+          },
+        ],
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(image.prepareRemoteImage).toHaveBeenCalledWith(
+      imageUrl,
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+    expect(runWithDetails).toHaveBeenCalledWith(
+      [
+        "user: Find this game by name and cover.",
+        "[store cover attached when available]",
+        `image_url: ${imageUrl}`,
+      ].join("\n"),
+      {
+        model: "gpt-5.5",
+        reasoningEffort: "medium",
+        webSearch: false,
+        imagePaths: [imagePath],
+        signal: expect.any(AbortSignal),
+      },
+    );
+    expect(image.cleanup).toHaveBeenCalledOnce();
+    await app.close();
+  });
+
+  it("continues name-only after a safe image rejection and logs only its bounded reason", async () => {
+    const logDir = await tempDir();
+    const imageUrl =
+      "https://caller:secret@169.254.169.254/private-cover.jpg?credential=do-not-log";
+    const image = fakeImagePreparer({ path: null, reason: "credentials" });
+    const { runner, runWithDetails } = fakeDetailedRunner("Name-only result");
+    const app = createServer({
+      config: { ...testConfig(), callLoggingEnabled: true, callLogDir: logDir },
+      runner,
+      prepareRemoteImage: image.prepareRemoteImage,
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/responses",
+      payload: {
+        model: "gpt-5.5",
+        input: [
+          {
+            role: "user",
+            content: [
+              { type: "input_text", text: "Coffee Rush" },
+              { type: "input_image", image_url: imageUrl },
+            ],
+          },
+        ],
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(runWithDetails).toHaveBeenCalledWith(expect.stringContaining("Coffee Rush"), {
+      model: "gpt-5.5",
+      reasoningEffort: "medium",
+      webSearch: false,
+      imagePaths: [],
+      signal: expect.any(AbortSignal),
+    });
+    expect(image.cleanup).toHaveBeenCalledOnce();
+
+    const logContent = await readFile(join(logDir, "calls.jsonl"), "utf8");
+    expect(JSON.parse(logContent)).toMatchObject({ imageDiagnosticCode: "credentials" });
+    expect(logContent).not.toContain(imageUrl);
+    expect(logContent).not.toContain("caller");
+    expect(logContent).not.toContain("secret");
+    expect(logContent).not.toContain("169.254.169.254");
+    expect(logContent).not.toContain("codexapi-image-");
+    expect(logContent).not.toContain("ffd8ff");
+    await app.close();
+  });
+
+  it("cleans a prepared image when the runner fails", async () => {
+    const image = fakeImagePreparer({ path: "C:\\safe-temp\\image.jpg" });
+    const runner: CodexRunner = {
+      run: vi.fn(async () => {
+        throw new Error("runner failed");
+      }),
+    };
+    const app = createServer({
+      config: testConfig(),
+      runner,
+      prepareRemoteImage: image.prepareRemoteImage,
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/responses",
+      payload: {
+        input: [
+          {
+            role: "user",
+            content: [
+              { type: "input_text", text: "Coffee Rush" },
+              { type: "input_image", image_url: "https://images.example.test/cover.jpg" },
+            ],
+          },
+        ],
+      },
+    });
+
+    expect(response.statusCode).toBe(500);
+    expect(image.cleanup).toHaveBeenCalledOnce();
+    await app.close();
+  });
+
+  it("cleans a prepared image when structured output validation fails", async () => {
+    const image = fakeImagePreparer({ path: "C:\\safe-temp\\image.jpg" });
+    const { runner } = fakeDetailedRunner('{"translatedText":"Hola"}');
+    const app = createServer({
+      config: testConfig(),
+      runner,
+      prepareRemoteImage: image.prepareRemoteImage,
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/responses",
+      payload: {
+        input: [
+          {
+            role: "user",
+            content: [
+              { type: "input_text", text: "Translate hello." },
+              { type: "input_image", image_url: "https://images.example.test/cover.jpg" },
+            ],
+          },
+        ],
+        text: {
+          format: {
+            type: "json_schema",
+            name: "translation_result",
+            strict: true,
+            schema: responseSchema,
+          },
+        },
+      },
+    });
+
+    expect(response.statusCode).toBe(500);
+    expect(response.json()).toMatchObject({
+      error: { code: "invalid_structured_output" },
+    });
+    expect(image.cleanup).toHaveBeenCalledOnce();
+    await app.close();
+  });
+
+  it("rejects malformed Responses image syntax before fetching or invoking Codex", async () => {
+    const image = fakeImagePreparer({ path: null });
+    const { runner, runWithDetails } = fakeDetailedRunner();
+    const app = createServer({
+      config: testConfig(),
+      runner,
+      prepareRemoteImage: image.prepareRemoteImage,
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/responses",
+      payload: {
+        input: [
+          {
+            role: "user",
+            content: [{ type: "input_image", image_url: { url: "file:///etc/passwd" } }],
+          },
+        ],
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({
+      error: {
+        type: "invalid_request_error",
+        param: "input",
+        code: "invalid_input_image",
+      },
+    });
+    expect(image.prepareRemoteImage).not.toHaveBeenCalled();
+    expect(runWithDetails).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it("rejects nested chat image syntax before invoking Codex", async () => {
+    const { runner, runWithDetails } = fakeDetailedRunner();
+    const app = createServer({ config: testConfig(), runner });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/chat/completions",
+      payload: {
+        messages: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "wrapper",
+                content: {
+                  type: "input_image",
+                  image_url: "file:///etc/passwd",
+                },
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({
+      error: {
+        type: "invalid_request_error",
+        param: "messages",
+        code: "unsupported_chat_image",
+      },
+    });
+    expect(runWithDetails).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it("cancels Codex and promptly cleans a prepared image after request disconnect", async () => {
+    const logDir = await tempDir();
+    const imageUrl =
+      "https://caller:secret@images.example.test/private-cover.jpg?credential=do-not-log";
+    const imagePath = "C:\\safe-temp\\codexapi-image-sensitive\\image.jpg";
+    let finishCleanup!: () => void;
+    const cleanupFinished = new Promise<void>((resolve) => {
+      finishCleanup = resolve;
+    });
+    const cleanup = vi.fn(async () => {
+      finishCleanup();
+    });
+    const prepareRemoteImage = vi.fn(async () => ({
+      path: imagePath,
+      reason: null,
+      cleanup,
+    }));
+    let notifyRunnerStarted!: () => void;
+    const runnerStarted = new Promise<void>((resolve) => {
+      notifyRunnerStarted = resolve;
+    });
+    let runnerSignal: AbortSignal | undefined;
+    const runWithDetails = vi.fn<NonNullable<CodexRunner["runWithDetails"]>>(
+      async (_prompt, options) => {
+        runnerSignal = options?.signal;
+        notifyRunnerStarted();
+        return await new Promise((_resolve, reject) => {
+          const rejectCancelled = () => {
+            reject(
+              new CodexRunnerError({
+                message: "Codex command was cancelled.",
+                code: "CANCELLED",
+                stdout: imageUrl,
+                stderr: imagePath,
+                command: {
+                  executable: "codex",
+                  args: ["--image", imagePath],
+                  cwd: "C:/sensitive-workspace",
+                  shell: false,
+                },
+              }),
+            );
+          };
+          if (runnerSignal?.aborted) {
+            rejectCancelled();
+          } else {
+            runnerSignal?.addEventListener("abort", rejectCancelled, { once: true });
+          }
+        });
+      },
+    );
+    const runner: CodexRunner = {
+      run: vi.fn(async () => "unused"),
+      runWithDetails,
+    };
+    const requestController = new AbortController();
+    const app = createServer({
+      config: { ...testConfig(), callLoggingEnabled: true, callLogDir: logDir },
+      runner,
+      prepareRemoteImage,
+      requestSignal: () => requestController.signal,
+    });
+
+    const responsePromise = app.inject({
+      method: "POST",
+      url: "/v1/responses",
+      payload: {
+        input: [
+          {
+            role: "user",
+            content: [
+              { type: "input_text", text: "Coffee Rush" },
+              { type: "input_image", image_url: imageUrl },
+            ],
+          },
+        ],
+      },
+    });
+
+    await runnerStarted;
+    requestController.abort();
+    const response = await responsePromise;
+    await cleanupFinished;
+    expect(response.statusCode).toBe(499);
+    expect(response.json()).toMatchObject({
+      error: { code: "request_cancelled", message: "Request was cancelled." },
+    });
+    expect(runnerSignal).toBeInstanceOf(AbortSignal);
+    expect(runnerSignal?.aborted).toBe(true);
+    expect(cleanup).toHaveBeenCalledOnce();
+    const logContent = await readFile(join(logDir, "calls.jsonl"), "utf8");
+    expect(JSON.parse(logContent)).toMatchObject({
+      imageDiagnosticCode: "none",
+      statusCode: 499,
+      error: { code: "request_cancelled" },
+    });
+    for (const sensitiveValue of [imageUrl, "caller", "secret", imagePath, "--image"]) {
+      expect(logContent).not.toContain(sensitiveValue);
+    }
+    await app.close();
+  });
+
+  it("cancels an in-flight image fetch before starting a disconnected Codex run", async () => {
+    const requestController = new AbortController();
+    let notifyFetchStarted!: () => void;
+    const fetchStarted = new Promise<void>((resolve) => {
+      notifyFetchStarted = resolve;
+    });
+    const cleanup = vi.fn(async () => undefined);
+    const prepareRemoteImage = vi.fn(
+      async (_url: string, dependencies?: SafeRemoteImageDependencies) => {
+        notifyFetchStarted();
+        await new Promise<void>((resolve) => {
+          if (dependencies?.signal?.aborted) {
+            resolve();
+          } else {
+            dependencies?.signal?.addEventListener("abort", () => resolve(), {
+              once: true,
+            });
+          }
+        });
+        return {
+          path: null,
+          reason: "fetch_failed" as const,
+          cleanup,
+        };
+      },
+    );
+    const runWithDetails = vi.fn<NonNullable<CodexRunner["runWithDetails"]>>(
+      async (_prompt, options) => {
+        expect(options?.signal?.aborted).toBe(true);
+        throw new CodexRunnerError({
+          message: "Codex command was cancelled.",
+          code: "CANCELLED",
+        });
+      },
+    );
+    const app = createServer({
+      config: testConfig(),
+      runner: { run: vi.fn(async () => "unused"), runWithDetails },
+      prepareRemoteImage,
+      requestSignal: () => requestController.signal,
+    });
+
+    const responsePromise = app.inject({
+      method: "POST",
+      url: "/v1/responses",
+      payload: {
+        input: [
+          {
+            role: "user",
+            content: [
+              { type: "input_text", text: "Coffee Rush" },
+              {
+                type: "input_image",
+                image_url: "https://images.example.test/cover.jpg",
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    await fetchStarted;
+    requestController.abort();
+    const response = await responsePromise;
+
+    expect(response.statusCode).toBe(499);
+    expect(response.json()).toMatchObject({ error: { code: "request_cancelled" } });
+    expect(runWithDetails).toHaveBeenCalledOnce();
+    expect(cleanup).toHaveBeenCalledOnce();
     await app.close();
   });
 
@@ -390,6 +834,7 @@ describe("Fastify server", () => {
       reasoningEffort: "max",
       webSearch: false,
       imagePaths: [],
+      signal: expect.any(AbortSignal),
     });
     expect(responsesResponse.json()).toMatchObject({
       model: "gpt-5.6-sol",
@@ -470,6 +915,7 @@ describe("Fastify server", () => {
       reasoningEffort: "medium",
       webSearch: false,
       imagePaths: [],
+      signal: expect.any(AbortSignal),
     });
     await app.close();
   });
@@ -555,6 +1001,7 @@ describe("Fastify server", () => {
       reasoningEffort: "medium",
       webSearch: false,
       imagePaths: [],
+      signal: expect.any(AbortSignal),
     });
 
     const logContent = await readFile(join(logDir, "calls.jsonl"), "utf8");

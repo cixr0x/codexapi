@@ -155,6 +155,216 @@ describe("OpenAI compatibility mapping", () => {
     expect(prompt).toBe("user: First line.\nSecond line.\nassistant: Prior answer.");
   });
 
+  it("extracts one Responses input_image while keeping its URL and a fixed marker in the prompt", () => {
+    const imageUrl = "https://images.example.test/store-cover.webp?version=2";
+
+    const normalized = normalizeResponsesRequest({
+      input: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "input_text",
+              text: '{"itemName":"Coffee Rush","imageUrl":"https://images.example.test/store-cover.webp?version=2"}',
+            },
+            { type: "input_image", image_url: imageUrl, detail: "high" },
+          ],
+        },
+      ],
+    });
+
+    expect(normalized).toEqual({
+      prompt: [
+        'user: {"itemName":"Coffee Rush","imageUrl":"https://images.example.test/store-cover.webp?version=2"}',
+        "[store cover attached when available]",
+        `image_url: ${imageUrl}`,
+      ].join("\n"),
+      webSearch: false,
+      imageUrl,
+    });
+    expect(normalized.prompt).not.toContain("[input_image]");
+  });
+
+  it("rejects a second Responses input_image before prompt construction", () => {
+    expect(() =>
+      normalizeResponsesRequest({
+        input: [
+          {
+            role: "user",
+            content: [
+              { type: "input_image", image_url: "https://images.example.test/one.jpg" },
+              { type: "input_image", image_url: "https://images.example.test/two.jpg" },
+            ],
+          },
+        ],
+      }),
+    ).toThrow(
+      expect.objectContaining({
+        statusCode: 400,
+        body: expect.objectContaining({
+          error: expect.objectContaining({
+            type: "invalid_request_error",
+            param: "input",
+            code: "multiple_input_images",
+          }),
+        }),
+      }),
+    );
+  });
+
+  it.each([
+    ["a missing image_url", { type: "input_image" }],
+    ["a non-string image_url", { type: "input_image", image_url: { url: "https://example.test" } }],
+    ["a file_id source", { type: "input_image", file_id: "file_123" }],
+  ])("rejects input_image with %s", (_name, imagePart) => {
+    expect(() =>
+      normalizeResponsesRequest({
+        input: [{ role: "user", content: [imagePart] }],
+      }),
+    ).toThrow(
+      expect.objectContaining({
+        statusCode: 400,
+        body: expect.objectContaining({
+          error: expect.objectContaining({
+            type: "invalid_request_error",
+            param: "input",
+            code: "invalid_input_image",
+          }),
+        }),
+      }),
+    );
+  });
+
+  it("rejects input_image records outside a Responses message content array", () => {
+    expect(() =>
+      normalizeResponsesRequest({
+        input: [
+          { type: "input_image", image_url: "https://images.example.test/cover.jpg" },
+        ],
+      }),
+    ).toThrow(
+      expect.objectContaining({
+        statusCode: 400,
+        body: expect.objectContaining({
+          error: expect.objectContaining({
+            type: "invalid_request_error",
+            param: "input",
+            code: "invalid_input_image",
+          }),
+        }),
+      }),
+    );
+  });
+
+  it("rejects an input_image object used directly as Responses message content", () => {
+    expect(() =>
+      normalizeResponsesRequest({
+        input: [
+          {
+            role: "user",
+            content: {
+              type: "input_image",
+              image_url: "https://images.example.test/cover.jpg",
+            },
+          },
+        ],
+      }),
+    ).toThrow(
+      expect.objectContaining({
+        statusCode: 400,
+        body: expect.objectContaining({
+          error: expect.objectContaining({
+            type: "invalid_request_error",
+            param: "input",
+            code: "invalid_input_image",
+          }),
+        }),
+      }),
+    );
+  });
+
+  it("rejects input_image nested under a non-array Responses input object", () => {
+    expect(() =>
+      normalizeResponsesRequest({
+        input: {
+          role: "user",
+          content: [
+            { type: "input_image", image_url: "file:///etc/passwd" },
+          ],
+        },
+      }),
+    ).toThrow(
+      expect.objectContaining({
+        statusCode: 400,
+        body: expect.objectContaining({
+          error: expect.objectContaining({
+            type: "invalid_request_error",
+            param: "input",
+            code: "invalid_input_image",
+          }),
+        }),
+      }),
+    );
+  });
+
+  it("rejects input_image content on the chat endpoint", () => {
+    expect(() =>
+      buildChatPrompt({
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "input_image", image_url: "https://images.example.test/cover.jpg" },
+            ],
+          },
+        ],
+      }),
+    ).toThrow(
+      expect.objectContaining({
+        statusCode: 400,
+        body: expect.objectContaining({
+          error: expect.objectContaining({
+            type: "invalid_request_error",
+            param: "messages",
+            code: "unsupported_chat_image",
+          }),
+        }),
+      }),
+    );
+  });
+
+  it("rejects nested malformed input_image syntax on the chat endpoint", () => {
+    expect(() =>
+      buildChatPrompt({
+        messages: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "wrapper",
+                content: {
+                  type: "input_image",
+                  image_url: "file:///etc/passwd",
+                },
+              },
+            ],
+          },
+        ],
+      }),
+    ).toThrow(
+      expect.objectContaining({
+        statusCode: 400,
+        body: expect.objectContaining({
+          error: expect.objectContaining({
+            type: "invalid_request_error",
+            param: "messages",
+            code: "unsupported_chat_image",
+          }),
+        }),
+      }),
+    );
+  });
+
   it("adds json_schema response format instructions to Responses prompts", () => {
     const prompt = buildResponsesPrompt({
       model: "local-codex",

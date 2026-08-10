@@ -2,6 +2,7 @@ import { appendFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 
 import { type CodexCommandDetails } from "./codexRunner.js";
+import type { SafeImageReason } from "./safeRemoteImage.js";
 
 export interface CallLogEntry {
   id: string;
@@ -16,7 +17,7 @@ export interface CallLogEntry {
   rawStderr?: string;
   outputText?: string;
   webSearchEnabled: boolean;
-  imageDiagnosticCode: "none";
+  imageDiagnosticCode: "none" | SafeImageReason;
   durationMs: number;
   statusCode: number;
   error?: {

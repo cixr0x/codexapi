@@ -521,7 +521,191 @@ describe("Codex runner", () => {
     });
   });
 
-  it("kills the child process and rejects when the timeout elapses", async () => {
+  it("rejects an already-cancelled run without spawning Codex", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const child = new FakeChildProcess();
+    const spawn = createFakeSpawn(child);
+    const runner = createCodexRunner({
+      command: "codex",
+      commandArgs: [],
+      workspace: "C:/workspace",
+      codexHome: TEST_CODEX_HOME,
+      timeoutMs: 1000,
+      spawn,
+    });
+
+    const resultPromise = runner.runWithDetails!("sensitive prompt", {
+      signal: controller.signal,
+    });
+    if (spawn.mock.calls.length > 0) {
+      child.stdout.push("unexpected success\n");
+      child.close(0);
+    }
+
+    await expect(resultPromise).rejects.toMatchObject({
+      name: "CodexRunnerError",
+      code: "CANCELLED",
+      message: "Codex command was cancelled.",
+    });
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it("kills once on mid-run cancellation and rejects only after the child closes", async () => {
+    const controller = new AbortController();
+    const child = new FakeChildProcess();
+    const spawn = createFakeSpawn(child);
+    const runner = createCodexRunner({
+      command: "codex",
+      commandArgs: [],
+      workspace: "C:/workspace",
+      codexHome: TEST_CODEX_HOME,
+      timeoutMs: 1000,
+      spawn,
+    });
+    let settled = false;
+
+    const resultPromise = runner.runWithDetails!("sensitive prompt", {
+      signal: controller.signal,
+    });
+    const rejection = expect(resultPromise).rejects.toMatchObject({
+      code: "CANCELLED",
+      stdout: "partial output",
+      stderr: "partial warning",
+    });
+    void resultPromise.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+    child.stdout.push("partial output\n");
+    child.stderr.push("partial warning\n");
+
+    controller.abort();
+    await Promise.resolve();
+
+    expect(child.kill).toHaveBeenCalledTimes(1);
+    expect(settled).toBe(false);
+
+    child.close(null);
+    await rejection;
+    child.close(0);
+    expect(child.kill).toHaveBeenCalledTimes(1);
+  });
+
+  it("settles cancellation after a bounded grace when kill yields no process event", async () => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    const child = new FakeChildProcess();
+    child.kill.mockReturnValue(false);
+    const spawn = createFakeSpawn(child);
+    const runner = createCodexRunner({
+      command: "codex",
+      commandArgs: [],
+      workspace: "C:/workspace",
+      codexHome: TEST_CODEX_HOME,
+      timeoutMs: 1000,
+      terminationGraceMs: 50,
+      spawn,
+    });
+
+    const resultPromise = runner.runWithDetails!("sensitive prompt", {
+      signal: controller.signal,
+    });
+    const expectation = expect(resultPromise).rejects.toMatchObject({
+      code: "CANCELLED",
+      message: "Codex command was cancelled.",
+    });
+
+    try {
+      controller.abort();
+      expect(child.kill).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(49);
+      await expect(Promise.race([
+        resultPromise.then(
+          () => "settled",
+          () => "settled",
+        ),
+        Promise.resolve("pending"),
+      ])).resolves.toBe("pending");
+      await vi.advanceTimersByTimeAsync(1);
+      await expectation;
+      expect(child.kill).toHaveBeenCalledTimes(1);
+    } finally {
+      await vi.runAllTimersAsync();
+      await resultPromise.catch(() => undefined);
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not leave a grace timer when kill closes the child synchronously", async () => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    const child = new FakeChildProcess();
+    child.kill.mockImplementation(() => {
+      child.close(null);
+      return true;
+    });
+    const spawn = createFakeSpawn(child);
+    const runner = createCodexRunner({
+      command: "codex",
+      commandArgs: [],
+      workspace: "C:/workspace",
+      codexHome: TEST_CODEX_HOME,
+      timeoutMs: 1000,
+      terminationGraceMs: 50,
+      spawn,
+    });
+
+    const resultPromise = runner.runWithDetails!("sensitive prompt", {
+      signal: controller.signal,
+    });
+    try {
+      controller.abort();
+      await expect(resultPromise).rejects.toMatchObject({ code: "CANCELLED" });
+      expect(child.kill).toHaveBeenCalledTimes(1);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      await resultPromise.catch(() => undefined);
+      vi.useRealTimers();
+    }
+  });
+
+  it("removes an output-schema directory after a cancelled child closes", async () => {
+    const controller = new AbortController();
+    const child = new FakeChildProcess();
+    const spawn = createFakeSpawn(child);
+    const runner = createCodexRunner({
+      command: "codex",
+      commandArgs: [],
+      workspace: "C:/workspace",
+      codexHome: TEST_CODEX_HOME,
+      timeoutMs: 1000,
+      spawn,
+    });
+
+    const resultPromise = runner.runWithDetails!("sensitive prompt", {
+      signal: controller.signal,
+      outputSchema: { type: "object" },
+    });
+    await waitUntil(() => spawn.mock.calls.length === 1);
+    const args = spawn.mock.calls[0]?.[1] ?? [];
+    const schemaPath = args[args.indexOf("--output-schema") + 1]!;
+    await expect(access(schemaPath)).resolves.toBeUndefined();
+
+    controller.abort();
+    expect(child.kill).toHaveBeenCalledTimes(1);
+    await expect(access(schemaPath)).resolves.toBeUndefined();
+    child.close(null);
+
+    await expect(resultPromise).rejects.toMatchObject({ code: "CANCELLED" });
+    await expect(access(schemaPath)).rejects.toThrow();
+  });
+
+  it("kills the child on timeout and rejects with TIMEOUT only after it closes", async () => {
     vi.useFakeTimers();
     const child = new FakeChildProcess();
     const spawn = createFakeSpawn(child);
@@ -535,16 +719,32 @@ describe("Codex runner", () => {
     });
 
     const resultPromise = runner.run("Hello");
+    let settled = false;
+    void resultPromise.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
     const expectation = expect(resultPromise).rejects.toMatchObject({
       code: "TIMEOUT",
     });
-    await vi.advanceTimersByTimeAsync(51);
+    try {
+      await vi.advanceTimersByTimeAsync(51);
+      expect(child.kill).toHaveBeenCalledTimes(1);
+      expect(settled).toBe(false);
+      child.close(null);
 
-    await expectation;
-    await resultPromise.catch((error) => {
-      expect(error).toBeInstanceOf(CodexRunnerError);
-    });
-    expect(child.kill).toHaveBeenCalled();
-    vi.useRealTimers();
+      await expectation;
+      await resultPromise.catch((error) => {
+        expect(error).toBeInstanceOf(CodexRunnerError);
+      });
+    } finally {
+      child.close(null);
+      await expectation;
+      vi.useRealTimers();
+    }
   });
 });

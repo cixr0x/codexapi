@@ -9,6 +9,7 @@ export type CodexRunnerErrorCode =
   | "NON_ZERO_EXIT"
   | "SPAWN_ERROR"
   | "TIMEOUT"
+  | "CANCELLED"
   | "INVALID_OUTPUT";
 
 export class CodexRunnerError extends Error {
@@ -56,6 +57,7 @@ export interface CodexRunnerConfig {
   codexHome: string;
   timeoutMs: number;
   maxOutputBytes?: number;
+  terminationGraceMs?: number;
   spawn?: SpawnFn;
 }
 
@@ -65,6 +67,7 @@ export interface CodexRunOptions {
   outputSchema?: unknown;
   webSearch?: boolean;
   imagePaths?: readonly string[];
+  signal?: AbortSignal;
 }
 
 export interface CodexCommandDetails {
@@ -123,6 +126,9 @@ export function runCodexPromptWithDetails(
   config: CodexRunnerConfig,
   options: CodexRunOptions = {},
 ): Promise<CodexRunResult> {
+  if (options.signal?.aborted) {
+    return Promise.reject(cancelledRunnerError());
+  }
   if (options.outputSchema === undefined) {
     return runCodexProcess(prompt, config, options);
   }
@@ -155,11 +161,16 @@ function runCodexProcess(
     codexHome,
     timeoutMs,
     maxOutputBytes = 1024 * 1024,
+    terminationGraceMs = 1000,
     spawn = nodeSpawn,
   }: CodexRunnerConfig,
   options: CodexRunOptions,
   outputSchemaPath?: string,
 ): Promise<CodexRunResult> {
+  if (options.signal?.aborted) {
+    return Promise.reject(cancelledRunnerError());
+  }
+
   const model = normalizeStringOption(options.model);
   const reasoningEffort = normalizeStringOption(options.reasoningEffort);
   const imagePaths = options.imagePaths ?? [];
@@ -201,6 +212,9 @@ function runCodexProcess(
     let stdout = "";
     let stderr = "";
     let settled = false;
+    let termination: "TIMEOUT" | "CANCELLED" | undefined;
+    let killRequested = false;
+    let terminationGraceTimer: ReturnType<typeof setTimeout> | undefined;
 
     const child = spawn(command, args, {
       cwd: workspace,
@@ -209,33 +223,16 @@ function runCodexProcess(
       stdio: ["pipe", "pipe", "pipe"],
       env: createCodexChildEnvironment(codexHome),
     });
-    child.stdin?.write(prompt);
-    child.stdin?.end();
-
-    const timeout = setTimeout(() => {
-      settle(() => {
-        child.kill();
-        reject(
-          new CodexRunnerError({
-            message: `Codex command timed out after ${timeoutMs} ms.`,
-            code: "TIMEOUT",
-            stdout: stdout.trimEnd(),
-            stderr: stderr.trimEnd(),
-            command: commandDetails,
-          }),
-        );
-      });
-    }, timeoutMs);
-
-    child.stdout?.on("data", (chunk: Buffer | string) => {
+    const onStdout = (chunk: Buffer | string) => {
       stdout = appendBounded(stdout, chunk, maxOutputBytes);
-    });
-
-    child.stderr?.on("data", (chunk: Buffer | string) => {
+    };
+    const onStderr = (chunk: Buffer | string) => {
       stderr = appendBounded(stderr, chunk, maxOutputBytes);
-    });
-
-    child.on("error", (error: Error) => {
+    };
+    const onChildError = (error: Error) => {
+      if (termination) {
+        return;
+      }
       settle(() => {
         reject(
           new CodexRunnerError({
@@ -247,9 +244,45 @@ function runCodexProcess(
           }),
         );
       });
-    });
+    };
+    const settleAfterTermination = () => {
+      settle(() => {
+        const rawStdout = stdout.trimEnd();
+        const finalStderr = stderr.trimEnd();
 
-    child.on("close", (code: number | null) => {
+        if (termination === "CANCELLED") {
+          reject(
+            cancelledRunnerError({
+              stdout: rawStdout,
+              stderr: finalStderr,
+              command: commandDetails,
+            }),
+          );
+          return;
+        }
+
+        reject(
+          new CodexRunnerError({
+            message: `Codex command timed out after ${timeoutMs} ms.`,
+            code: "TIMEOUT",
+            stdout: rawStdout,
+            stderr: finalStderr,
+            command: commandDetails,
+          }),
+        );
+      });
+    };
+    const onChildExit = () => {
+      if (termination) {
+        settleAfterTermination();
+      }
+    };
+    const onChildClose = (code: number | null) => {
+      if (termination) {
+        settleAfterTermination();
+        return;
+      }
+
       settle(() => {
         const rawStdout = stdout.trimEnd();
         const finalStderr = stderr.trimEnd();
@@ -292,7 +325,35 @@ function runCodexProcess(
           );
         }
       });
-    });
+    };
+    const requestTermination = (reason: "TIMEOUT" | "CANCELLED") => {
+      if (settled || termination) {
+        return;
+      }
+      termination = reason;
+      clearTimeout(timeout);
+      terminationGraceTimer = setTimeout(settleAfterTermination, terminationGraceMs);
+      if (!killRequested) {
+        killRequested = true;
+        child.kill();
+      }
+    };
+    const onAbort = () => requestTermination("CANCELLED");
+    const timeout = setTimeout(() => requestTermination("TIMEOUT"), timeoutMs);
+
+    child.stdout?.on("data", onStdout);
+    child.stderr?.on("data", onStderr);
+    child.on("error", onChildError);
+    child.on("exit", onChildExit);
+    child.on("close", onChildClose);
+    options.signal?.addEventListener("abort", onAbort, { once: true });
+
+    if (options.signal?.aborted) {
+      onAbort();
+    } else {
+      child.stdin?.write(prompt);
+      child.stdin?.end();
+    }
 
     function settle(action: () => void): void {
       if (settled) {
@@ -301,8 +362,35 @@ function runCodexProcess(
 
       settled = true;
       clearTimeout(timeout);
+      if (terminationGraceTimer !== undefined) {
+        clearTimeout(terminationGraceTimer);
+      }
+      options.signal?.removeEventListener("abort", onAbort);
+      child.stdout?.removeListener("data", onStdout);
+      child.stderr?.removeListener("data", onStderr);
+      child.removeListener("error", onChildError);
+      child.removeListener("exit", onChildExit);
+      child.removeListener("close", onChildClose);
       action();
     }
+  });
+}
+
+function cancelledRunnerError({
+  stdout,
+  stderr,
+  command,
+}: {
+  stdout?: string;
+  stderr?: string;
+  command?: CodexCommandDetails;
+} = {}): CodexRunnerError {
+  return new CodexRunnerError({
+    message: "Codex command was cancelled.",
+    code: "CANCELLED",
+    stdout,
+    stderr,
+    command,
   });
 }
 
