@@ -53,6 +53,7 @@ export interface CodexRunnerConfig {
   command: string;
   commandArgs?: string[];
   workspace: string;
+  codexHome: string;
   timeoutMs: number;
   maxOutputBytes?: number;
   spawn?: SpawnFn;
@@ -151,6 +152,7 @@ function runCodexProcess(
     command,
     commandArgs = [],
     workspace,
+    codexHome,
     timeoutMs,
     maxOutputBytes = 1024 * 1024,
     spawn = nodeSpawn,
@@ -205,6 +207,7 @@ function runCodexProcess(
       shell: false,
       windowsHide: true,
       stdio: ["pipe", "pipe", "pipe"],
+      env: createCodexChildEnvironment(codexHome),
     });
     child.stdin?.write(prompt);
     child.stdin?.end();
@@ -301,6 +304,42 @@ function runCodexProcess(
       action();
     }
   });
+}
+
+const CODEX_CHILD_ENV_ALLOWLIST = [
+  "SystemRoot",
+  "WINDIR",
+  "TEMP",
+  "TMP",
+  "TMPDIR",
+  "SSL_CERT_FILE",
+  "SSL_CERT_DIR",
+  "NODE_EXTRA_CA_CERTS",
+  "OPENAI_API_KEY",
+] as const;
+
+export function createCodexChildEnvironment(
+  codexHome: string,
+  source: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+  const environment: NodeJS.ProcessEnv = {
+    CODEX_HOME: codexHome,
+    HOME: codexHome,
+    USERPROFILE: codexHome,
+  };
+  const sourceKeys = new Map(
+    Object.keys(source).map((key) => [key.toLowerCase(), key]),
+  );
+
+  for (const name of CODEX_CHILD_ENV_ALLOWLIST) {
+    const sourceKey = sourceKeys.get(name.toLowerCase());
+    const value = sourceKey === undefined ? undefined : source[sourceKey];
+    if (value !== undefined) {
+      environment[name] = value;
+    }
+  }
+
+  return environment;
 }
 
 function parseCodexOutput(rawStdout: string): ParsedCodexOutput {

@@ -10,6 +10,7 @@ import {
   createCodexRunner,
   type SpawnFn,
 } from "../src/codexRunner.js";
+import { defaultCodexCommand } from "../src/config.js";
 
 const SAFE_DEFAULT_EXEC_ARGS = [
   "exec",
@@ -75,6 +76,7 @@ const SAFE_DEFAULT_EXEC_ARGS = [
   "-c",
   'web_search="disabled"',
 ];
+const TEST_CODEX_HOME = "C:/codex-home";
 
 class FakeReadable extends EventEmitter {
   push(chunk: string | null): void {
@@ -146,6 +148,7 @@ describe("Codex runner", () => {
       command: "codex",
       commandArgs: [],
       workspace: "C:/workspace",
+      codexHome: TEST_CODEX_HOME,
       timeoutMs: 1000,
       spawn,
     });
@@ -183,6 +186,7 @@ describe("Codex runner", () => {
       command: "codex",
       commandArgs: [],
       workspace: "C:/workspace",
+      codexHome: TEST_CODEX_HOME,
       timeoutMs: 1000,
       spawn,
     });
@@ -213,6 +217,7 @@ describe("Codex runner", () => {
       command: "codex",
       commandArgs: [],
       workspace: "C:/workspace",
+      codexHome: TEST_CODEX_HOME,
       timeoutMs: 1000,
       spawn,
     });
@@ -246,6 +251,7 @@ describe("Codex runner", () => {
       command: "codex",
       commandArgs: [],
       workspace: "C:/workspace",
+      codexHome: TEST_CODEX_HOME,
       timeoutMs: 1000,
       spawn,
     });
@@ -275,12 +281,63 @@ describe("Codex runner", () => {
     );
   });
 
+  it("uses the pinned executable and a sanitized dedicated Codex environment", async () => {
+    const child = new FakeChildProcess();
+    const spawn = createFakeSpawn(child);
+    const pinnedCommand = defaultCodexCommand();
+    vi.stubEnv("OPENAI_API_KEY", "test-api-key");
+    vi.stubEnv("NODE_EXTRA_CA_CERTS", "C:/certs/extra.pem");
+    vi.stubEnv("PATH", "C:/attacker/bin");
+    vi.stubEnv("APPDATA", "C:/attacker/appdata");
+    vi.stubEnv("CODEX_PLUGIN_PATH", "C:/attacker/plugin");
+    vi.stubEnv("MCP_SERVER_COMMAND", "attacker-mcp");
+    vi.stubEnv("BROWSER", "attacker-browser");
+    vi.stubEnv("SHELL", "attacker-shell");
+    const runner = createCodexRunner({
+      command: pinnedCommand.command,
+      commandArgs: pinnedCommand.args,
+      workspace: "C:/workspace",
+      codexHome: "C:/dedicated-codex-home",
+      timeoutMs: 1000,
+      spawn,
+    });
+
+    try {
+      const resultPromise = runner.run("Hello");
+      child.stdout.push("OK\n");
+      child.close(0);
+      await expect(resultPromise).resolves.toBe("OK");
+
+      expect(spawn.mock.calls[0]?.[0]).toBe(pinnedCommand.command);
+      expect(spawn.mock.calls[0]?.[1].slice(0, pinnedCommand.args.length)).toEqual(
+        pinnedCommand.args,
+      );
+      const childEnv = spawn.mock.calls[0]?.[2].env;
+      expect(childEnv).toMatchObject({
+        CODEX_HOME: "C:/dedicated-codex-home",
+        HOME: "C:/dedicated-codex-home",
+        USERPROFILE: "C:/dedicated-codex-home",
+        OPENAI_API_KEY: "test-api-key",
+        NODE_EXTRA_CA_CERTS: "C:/certs/extra.pem",
+      });
+      expect(childEnv).not.toHaveProperty("PATH");
+      expect(childEnv).not.toHaveProperty("APPDATA");
+      expect(childEnv).not.toHaveProperty("CODEX_PLUGIN_PATH");
+      expect(childEnv).not.toHaveProperty("MCP_SERVER_COMMAND");
+      expect(childEnv).not.toHaveProperty("BROWSER");
+      expect(childEnv).not.toHaveProperty("SHELL");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("disables web search when the request does not opt in", async () => {
     const child = new FakeChildProcess();
     const spawn = createFakeSpawn(child);
     const runner = createCodexRunner({
       command: "codex",
       workspace: "C:/workspace",
+      codexHome: TEST_CODEX_HOME,
       timeoutMs: 1000,
       spawn,
     });
@@ -299,6 +356,7 @@ describe("Codex runner", () => {
     const runner = createCodexRunner({
       command: "codex",
       workspace: "C:/workspace",
+      codexHome: TEST_CODEX_HOME,
       timeoutMs: 1000,
       spawn,
     });
@@ -323,6 +381,7 @@ describe("Codex runner", () => {
     const runner = createCodexRunner({
       command: "codex",
       workspace: "C:/workspace",
+      codexHome: TEST_CODEX_HOME,
       timeoutMs: 1000,
       spawn,
     });
@@ -351,6 +410,7 @@ describe("Codex runner", () => {
     const runner = createCodexRunner({
       command: "codex",
       workspace: "C:/workspace",
+      codexHome: TEST_CODEX_HOME,
       timeoutMs: 1000,
       spawn,
     });
@@ -378,6 +438,7 @@ describe("Codex runner", () => {
     const runner = createCodexRunner({
       command: "codex",
       workspace: "C:/workspace",
+      codexHome: TEST_CODEX_HOME,
       timeoutMs: 1000,
       spawn,
     });
@@ -411,6 +472,7 @@ describe("Codex runner", () => {
       command: "codex",
       commandArgs: ["C:/codex/codex.js"],
       workspace: "C:/workspace",
+      codexHome: TEST_CODEX_HOME,
       timeoutMs: 1000,
       spawn,
     });
@@ -445,6 +507,7 @@ describe("Codex runner", () => {
       command: "missing-codex",
       commandArgs: [],
       workspace: "C:/workspace",
+      codexHome: TEST_CODEX_HOME,
       timeoutMs: 1000,
       spawn,
     });
@@ -466,6 +529,7 @@ describe("Codex runner", () => {
       command: "codex",
       commandArgs: [],
       workspace: "C:/workspace",
+      codexHome: TEST_CODEX_HOME,
       timeoutMs: 50,
       spawn,
     });

@@ -1,15 +1,18 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, isAbsolute, join, relative } from "node:path";
 
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 
 import { defaultCodexCommand, loadConfig } from "../src/config.js";
 
 const SAFE_WORKSPACE = mkdtempSync(join(tmpdir(), "codexapi-config-test-"));
+const SAFE_CODEX_HOME = mkdtempSync(join(tmpdir(), "codexapi-home-test-"));
 
 afterAll(() => {
   rmSync(SAFE_WORKSPACE, { recursive: true, force: true });
+  rmSync(SAFE_CODEX_HOME, { recursive: true, force: true });
 });
 
 function loadTestConfig(
@@ -17,27 +20,48 @@ function loadTestConfig(
   cwd = process.cwd(),
   platform: NodeJS.Platform = process.platform,
 ) {
-  return loadConfig({ CODEX_WORKSPACE: SAFE_WORKSPACE, ...env }, cwd, platform);
+  return loadConfig(
+    { CODEX_WORKSPACE: SAFE_WORKSPACE, CODEX_HOME: SAFE_CODEX_HOME, ...env },
+    cwd,
+    platform,
+  );
 }
 
 describe("config", () => {
-  it("uses the npm Codex node script as the default command on Windows", () => {
-    expect(
-      defaultCodexCommand(
-        "win32",
-        { APPDATA: "C:\\Users\\alice\\AppData\\Roaming" },
-        "C:\\Program Files\\nodejs\\node.exe",
+  it("resolves the exact pinned local Codex package under absolute Node", () => {
+    const resolved = defaultCodexCommand();
+    const expectedPackageRoot = dirname(
+      realpathSync.native(
+        createRequire(import.meta.url).resolve("@openai/codex/package.json"),
       ),
-    ).toEqual({
-      command: "C:\\Program Files\\nodejs\\node.exe",
-      args: [
-        "C:\\Users\\alice\\AppData\\Roaming\\npm\\node_modules\\@openai\\codex\\bin\\codex.js",
-      ],
-    });
+    );
+
+    expect(resolved.command).toBe(realpathSync.native(process.execPath));
+    expect(isAbsolute(resolved.command)).toBe(true);
+    expect(resolved.args).toHaveLength(1);
+
+    const scriptPath = resolved.args[0];
+    expect(isAbsolute(scriptPath)).toBe(true);
+    const packageRoot = dirname(dirname(scriptPath));
+    expect(packageRoot).toBe(expectedPackageRoot);
+    expect(relative(packageRoot, scriptPath)).not.toMatch(/^\.\.(?:[\\/]|$)/);
+    expect(scriptPath).toBe(join(packageRoot, "bin", "codex.js"));
+    const packageJson = JSON.parse(
+      readFileSync(join(packageRoot, "package.json"), "utf8"),
+    ) as { version?: string };
+    expect(packageJson.version).toBe("0.144.1");
   });
 
-  it("uses codex as the default command on non-Windows platforms", () => {
-    expect(defaultCodexCommand("linux")).toEqual({ command: "codex", args: [] });
+  it("ignores Windows APPDATA and executable wrapper inputs", () => {
+    const expected = defaultCodexCommand();
+    vi.stubEnv("APPDATA", "C:\\attacker");
+    vi.stubEnv("PATH", "C:\\attacker");
+
+    try {
+      expect(defaultCodexCommand()).toEqual(expected);
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("does not expose environment-controlled Codex executable configuration", () => {
@@ -71,6 +95,16 @@ describe("config", () => {
 
   it("uses the fixed local development port by default", () => {
     expect(loadTestConfig({}, "C:/repo", "linux").port).toBe(3001);
+  });
+
+  it("requires an explicit dedicated Codex home", () => {
+    expect(() =>
+      loadConfig({ CODEX_WORKSPACE: SAFE_WORKSPACE }, process.cwd(), process.platform),
+    ).toThrow("CODEX_HOME must be an absolute path.");
+  });
+
+  it("retains only the validated dedicated Codex home path", () => {
+    expect(loadTestConfig().codexHome).toBe(SAFE_CODEX_HOME);
   });
 
   it("keeps the execution backend and capability policy immutable", () => {

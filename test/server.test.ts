@@ -59,6 +59,7 @@ function testConfig() {
     port: 3001,
     codexBackend: "exec" as const,
     codexWorkspace: "C:/workspace",
+    codexHome: "C:/codex-home",
     codexTimeoutMs: 120000,
     codexDefaultModel: "gpt-5.4-mini",
     codexAllowedModels: ["gpt-5.4-mini", "gpt-5.5", "gpt-5.6-sol"],

@@ -1,4 +1,6 @@
-import { join, win32 } from "node:path";
+import { readFileSync, realpathSync } from "node:fs";
+import { createRequire } from "node:module";
+import { dirname, isAbsolute, join, relative } from "node:path";
 
 import { assertSafeExecutionConfig } from "./executionPolicy.js";
 
@@ -18,6 +20,7 @@ export interface AppConfig {
   port: number;
   codexBackend: CodexBackend;
   codexWorkspace: string;
+  codexHome: string;
   codexTimeoutMs: number;
   codexDefaultModel: string;
   codexAllowedModels: string[];
@@ -31,6 +34,9 @@ export interface CodexCommandDefault {
   args: string[];
 }
 
+const PINNED_CODEX_VERSION = "0.144.1";
+const requireFromHere = createRequire(import.meta.url);
+
 export function loadConfig(
   env: NodeJS.ProcessEnv = process.env,
   cwd = process.cwd(),
@@ -41,6 +47,7 @@ export function loadConfig(
     port: parseInteger(env.PORT, 3001, "PORT"),
     codexBackend: parseCodexBackend(env.CODEX_BACKEND),
     codexWorkspace: env.CODEX_WORKSPACE ?? "",
+    codexHome: env.CODEX_HOME ?? "",
     codexTimeoutMs: parseInteger(env.CODEX_TIMEOUT_MS, 120000, "CODEX_TIMEOUT_MS"),
     codexDefaultModel: parseString(env.CODEX_DEFAULT_MODEL, "gpt-5.4-mini"),
     codexAllowedModels: parseList(env.CODEX_ALLOWED_MODELS, [
@@ -61,33 +68,36 @@ export function loadConfig(
   return config;
 }
 
-export function defaultCodexCommand(
-  platform: NodeJS.Platform | string,
-  env: { APPDATA?: string } = process.env,
-  nodeExecPath = process.execPath,
-): CodexCommandDefault {
-  if (platform !== "win32") {
-    return { command: "codex", args: [] };
+export function defaultCodexCommand(): CodexCommandDefault {
+  const packageJsonPath = realpathSync.native(
+    requireFromHere.resolve("@openai/codex/package.json"),
+  );
+  const packageRoot = dirname(packageJsonPath);
+  const metadata = JSON.parse(readFileSync(packageJsonPath, "utf8")) as {
+    version?: string;
+  };
+  if (metadata.version !== PINNED_CODEX_VERSION) {
+    throw new Error(
+      `Installed @openai/codex version must be exactly ${PINNED_CODEX_VERSION}.`,
+    );
   }
 
-  if (env.APPDATA) {
-    return {
-      command: nodeExecPath,
-      args: [
-        win32.join(
-          env.APPDATA,
-          "npm",
-          "node_modules",
-          "@openai",
-          "codex",
-          "bin",
-          "codex.js",
-        ),
-      ],
-    };
+  const scriptPath = realpathSync.native(join(packageRoot, "bin", "codex.js"));
+  const scriptRelation = relative(packageRoot, scriptPath);
+  if (
+    !isAbsolute(scriptPath) ||
+    /^\.\.(?:[\\/]|$)/.test(scriptRelation) ||
+    isAbsolute(scriptRelation)
+  ) {
+    throw new Error("Resolved Codex script must stay inside the pinned package.");
   }
 
-  return { command: "codex", args: [] };
+  const command = realpathSync.native(process.execPath);
+  if (!isAbsolute(command)) {
+    throw new Error("Node executable path must be absolute.");
+  }
+
+  return { command, args: [scriptPath] };
 }
 
 function parseInteger(

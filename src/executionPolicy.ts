@@ -63,7 +63,7 @@ export function executionPolicyHealth() {
 }
 
 export function assertSafeExecutionConfig(
-  config: Pick<AppConfig, "codexWorkspace">,
+  config: Pick<AppConfig, "codexWorkspace" | "codexHome">,
 ): void {
   const workspace = config.codexWorkspace.trim();
   if (!workspace || !isAbsolute(workspace)) {
@@ -117,6 +117,52 @@ export function assertSafeExecutionConfig(
 
   if (readdirSync(resolvedWorkspace).length !== 0) {
     throw new Error("CODEX_WORKSPACE must be empty.");
+  }
+
+  const codexHome = config.codexHome.trim();
+  if (!codexHome || !isAbsolute(codexHome)) {
+    throw new Error("CODEX_HOME must be an absolute path.");
+  }
+
+  const resolvedCodexHome = resolve(codexHome);
+  if (pathKey(resolvedCodexHome) === pathKey(parse(resolvedCodexHome).root)) {
+    throw new Error("CODEX_HOME must not be a filesystem root.");
+  }
+
+  if (
+    [process.cwd(), CODEXAPI_CHECKOUT].some((protectedPath) =>
+      pathsOverlap(resolvedCodexHome, protectedPath),
+    )
+  ) {
+    throw new Error(
+      "CODEX_HOME must be outside source and current working directories.",
+    );
+  }
+
+  let codexHomeStat;
+  try {
+    codexHomeStat = lstatSync(resolvedCodexHome);
+  } catch {
+    throw new Error("CODEX_HOME must exist as a directory.");
+  }
+
+  if (codexHomeStat.isSymbolicLink()) {
+    throw new Error("CODEX_HOME must not be a symbolic link or reparse point.");
+  }
+
+  if (!codexHomeStat.isDirectory()) {
+    throw new Error("CODEX_HOME must exist as a directory.");
+  }
+
+  let canonicalCodexHome;
+  try {
+    canonicalCodexHome = realpathSync.native(resolvedCodexHome);
+  } catch {
+    throw new Error("CODEX_HOME must exist as a directory.");
+  }
+
+  if (pathKey(canonicalCodexHome) !== pathKey(resolvedCodexHome)) {
+    throw new Error("CODEX_HOME must not be a symbolic link or reparse point.");
   }
 }
 

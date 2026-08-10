@@ -383,11 +383,12 @@ function hasCodexRunOptions(options: CodexRunOptions): boolean {
 
 function createConfiguredCodexRunner(config: AppConfig): CodexRunner {
   assertSafeExecutionConfig(config);
-  const command = defaultCodexCommand(process.platform);
+  const command = defaultCodexCommand();
   return createCodexRunner({
     command: command.command,
     commandArgs: command.args,
     workspace: config.codexWorkspace,
+    codexHome: config.codexHome,
     timeoutMs: config.codexTimeoutMs,
   });
 }

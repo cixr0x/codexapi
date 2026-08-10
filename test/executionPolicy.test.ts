@@ -54,9 +54,12 @@ const EXPECTED_POLICY = {
 };
 
 let tempRoot: string;
+let safeCodexHome: string;
 
 beforeEach(() => {
   tempRoot = mkdtempSync(join(tmpdir(), "codexapi-policy-test-"));
+  safeCodexHome = join(tempRoot, "codex-home");
+  mkdirSync(safeCodexHome);
 });
 
 afterEach(() => {
@@ -64,6 +67,10 @@ afterEach(() => {
 });
 
 describe("Codex execution policy", () => {
+  function executionConfig(codexWorkspace: string, codexHome = safeCodexHome) {
+    return { codexWorkspace, codexHome };
+  }
+
   it("exposes an immutable, JSON-safe projection of the fixed policy", () => {
     expect(CODEX_EXECUTION_POLICY).toMatchObject(EXPECTED_POLICY);
     expect(Object.isFrozen(CODEX_EXECUTION_POLICY)).toBe(true);
@@ -89,7 +96,7 @@ describe("Codex execution policy", () => {
   it.each(["", "   ", "relative/inference"])(
     "rejects a blank or non-absolute workspace: %j",
     (codexWorkspace) => {
-      expect(() => assertSafeExecutionConfig({ codexWorkspace })).toThrow(
+      expect(() => assertSafeExecutionConfig(executionConfig(codexWorkspace))).toThrow(
         "CODEX_WORKSPACE must be an absolute path.",
       );
     },
@@ -102,7 +109,7 @@ describe("Codex execution policy", () => {
   ])(
     "rejects a source-bearing workspace: %s",
     (codexWorkspace) => {
-      expect(() => assertSafeExecutionConfig({ codexWorkspace })).toThrow(
+      expect(() => assertSafeExecutionConfig(executionConfig(codexWorkspace))).toThrow(
         "CODEX_WORKSPACE must be outside source and current working directories.",
       );
     },
@@ -110,13 +117,13 @@ describe("Codex execution policy", () => {
 
   it("rejects filesystem roots", () => {
     expect(() =>
-      assertSafeExecutionConfig({ codexWorkspace: parse(process.cwd()).root }),
+      assertSafeExecutionConfig(executionConfig(parse(process.cwd()).root)),
     ).toThrow("CODEX_WORKSPACE must not be a filesystem root.");
   });
 
   it("rejects a missing workspace", () => {
     expect(() =>
-      assertSafeExecutionConfig({ codexWorkspace: join(tempRoot, "missing") }),
+      assertSafeExecutionConfig(executionConfig(join(tempRoot, "missing"))),
     ).toThrow("CODEX_WORKSPACE must exist as an empty directory.");
   });
 
@@ -124,7 +131,7 @@ describe("Codex execution policy", () => {
     const filePath = join(tempRoot, "workspace.txt");
     writeFileSync(filePath, "not a directory", "utf8");
 
-    expect(() => assertSafeExecutionConfig({ codexWorkspace: filePath })).toThrow(
+    expect(() => assertSafeExecutionConfig(executionConfig(filePath))).toThrow(
       "CODEX_WORKSPACE must exist as an empty directory.",
     );
   });
@@ -135,7 +142,7 @@ describe("Codex execution policy", () => {
     mkdirSync(targetPath);
     symlinkSync(targetPath, linkPath, process.platform === "win32" ? "junction" : "dir");
 
-    expect(() => assertSafeExecutionConfig({ codexWorkspace: linkPath })).toThrow(
+    expect(() => assertSafeExecutionConfig(executionConfig(linkPath))).toThrow(
       "CODEX_WORKSPACE must not be a symbolic link or reparse point.",
     );
   });
@@ -152,7 +159,7 @@ describe("Codex execution policy", () => {
     );
 
     expect(() =>
-      assertSafeExecutionConfig({ codexWorkspace: join(linkParent, "workspace") }),
+      assertSafeExecutionConfig(executionConfig(join(linkParent, "workspace"))),
     ).toThrow("CODEX_WORKSPACE must not be a symbolic link or reparse point.");
   });
 
@@ -161,7 +168,7 @@ describe("Codex execution policy", () => {
     mkdirSync(workspace);
     writeFileSync(join(workspace, "payload.txt"), "content", "utf8");
 
-    expect(() => assertSafeExecutionConfig({ codexWorkspace: workspace })).toThrow(
+    expect(() => assertSafeExecutionConfig(executionConfig(workspace))).toThrow(
       "CODEX_WORKSPACE must be empty.",
     );
   });
@@ -171,7 +178,102 @@ describe("Codex execution policy", () => {
     mkdirSync(workspace);
 
     expect(() =>
-      assertSafeExecutionConfig({ codexWorkspace: workspace }),
+      assertSafeExecutionConfig(executionConfig(workspace)),
+    ).not.toThrow();
+  });
+
+  it.each(["", "   ", "relative/codex-home"])(
+    "rejects a blank or non-absolute Codex home: %j",
+    (codexHome) => {
+      const workspace = join(tempRoot, "empty-inference");
+      mkdirSync(workspace);
+
+      expect(() =>
+        assertSafeExecutionConfig(executionConfig(workspace, codexHome)),
+      ).toThrow("CODEX_HOME must be an absolute path.");
+    },
+  );
+
+  it.each([
+    process.cwd(),
+    dirname(process.cwd()),
+    join(process.cwd(), "nested-codex-home"),
+  ])("rejects a source-bearing Codex home: %s", (codexHome) => {
+    const workspace = join(tempRoot, "empty-inference");
+    mkdirSync(workspace);
+
+    expect(() =>
+      assertSafeExecutionConfig(executionConfig(workspace, codexHome)),
+    ).toThrow("CODEX_HOME must be outside source and current working directories.");
+  });
+
+  it("rejects a filesystem root as the Codex home", () => {
+    const workspace = join(tempRoot, "empty-inference");
+    mkdirSync(workspace);
+
+    expect(() =>
+      assertSafeExecutionConfig(
+        executionConfig(workspace, parse(process.cwd()).root),
+      ),
+    ).toThrow("CODEX_HOME must not be a filesystem root.");
+  });
+
+  it("rejects a missing or non-directory Codex home", () => {
+    const workspace = join(tempRoot, "empty-inference");
+    const homeFile = join(tempRoot, "codex-home.txt");
+    mkdirSync(workspace);
+    writeFileSync(homeFile, "not a directory", "utf8");
+
+    expect(() =>
+      assertSafeExecutionConfig(
+        executionConfig(workspace, join(tempRoot, "missing-home")),
+      ),
+    ).toThrow("CODEX_HOME must exist as a directory.");
+    expect(() =>
+      assertSafeExecutionConfig(executionConfig(workspace, homeFile)),
+    ).toThrow("CODEX_HOME must exist as a directory.");
+  });
+
+  it("rejects a symbolic-link or reparse-point Codex home", () => {
+    const workspace = join(tempRoot, "empty-inference");
+    const targetPath = join(tempRoot, "home-target");
+    const linkPath = join(tempRoot, "linked-home");
+    mkdirSync(workspace);
+    mkdirSync(targetPath);
+    symlinkSync(targetPath, linkPath, process.platform === "win32" ? "junction" : "dir");
+
+    expect(() =>
+      assertSafeExecutionConfig(executionConfig(workspace, linkPath)),
+    ).toThrow("CODEX_HOME must not be a symbolic link or reparse point.");
+  });
+
+  it("rejects a Codex home reached through a symbolic-link ancestor", () => {
+    const workspace = join(tempRoot, "empty-inference");
+    const targetParent = join(tempRoot, "home-target-parent");
+    const targetHome = join(targetParent, "home");
+    const linkParent = join(tempRoot, "linked-home-parent");
+    mkdirSync(workspace);
+    mkdirSync(targetHome, { recursive: true });
+    symlinkSync(
+      targetParent,
+      linkParent,
+      process.platform === "win32" ? "junction" : "dir",
+    );
+
+    expect(() =>
+      assertSafeExecutionConfig(
+        executionConfig(workspace, join(linkParent, "home")),
+      ),
+    ).toThrow("CODEX_HOME must not be a symbolic link or reparse point.");
+  });
+
+  it("accepts a dedicated non-empty Codex home", () => {
+    const workspace = join(tempRoot, "empty-inference");
+    mkdirSync(workspace);
+    writeFileSync(join(safeCodexHome, "auth.json"), "{}", "utf8");
+
+    expect(() =>
+      assertSafeExecutionConfig(executionConfig(workspace)),
     ).not.toThrow();
   });
 });
