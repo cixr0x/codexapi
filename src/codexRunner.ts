@@ -3,6 +3,8 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { CODEX_EXECUTION_POLICY } from "./executionPolicy.js";
+
 export type CodexRunnerErrorCode =
   | "NON_ZERO_EXIT"
   | "SPAWN_ERROR"
@@ -51,12 +53,6 @@ export interface CodexRunnerConfig {
   command: string;
   commandArgs?: string[];
   workspace: string;
-  profile: string;
-  ignoreUserConfig?: boolean;
-  disablePlugins?: boolean;
-  disableShellSnapshot?: boolean;
-  ephemeral?: boolean;
-  ignoreRules?: boolean;
   timeoutMs: number;
   maxOutputBytes?: number;
   spawn?: SpawnFn;
@@ -66,6 +62,8 @@ export interface CodexRunOptions {
   model?: string;
   reasoningEffort?: string;
   outputSchema?: unknown;
+  webSearch?: boolean;
+  imagePaths?: readonly string[];
 }
 
 export interface CodexCommandDetails {
@@ -153,12 +151,6 @@ function runCodexProcess(
     command,
     commandArgs = [],
     workspace,
-    profile,
-    ignoreUserConfig = false,
-    disablePlugins = false,
-    disableShellSnapshot = false,
-    ephemeral = false,
-    ignoreRules = false,
     timeoutMs,
     maxOutputBytes = 1024 * 1024,
     spawn = nodeSpawn,
@@ -168,6 +160,7 @@ function runCodexProcess(
 ): Promise<CodexRunResult> {
   const model = normalizeStringOption(options.model);
   const reasoningEffort = normalizeStringOption(options.reasoningEffort);
+  const imagePaths = options.imagePaths ?? [];
   const args = [
     ...commandArgs,
     "exec",
@@ -175,18 +168,23 @@ function runCodexProcess(
     "--json",
     "--skip-git-repo-check",
     "--sandbox",
-    "danger-full-access",
-    "--dangerously-bypass-approvals-and-sandbox",
+    CODEX_EXECUTION_POLICY.sandbox,
+    "-c",
+    `approval_policy=${tomlString(CODEX_EXECUTION_POLICY.approvalPolicy)}`,
+    "--ignore-user-config",
+    "--ignore-rules",
+    "--ephemeral",
+    "--strict-config",
+    ...CODEX_EXECUTION_POLICY.disabledFeatures.flatMap((name) => ["--disable", name]),
+    "-c",
+    `web_search=${options.webSearch ? '"live"' : '"disabled"'}`,
+    ...(options.webSearch ? ["-c", "tools.web_search=true"] : []),
+    ...imagePaths.flatMap((path) => ["--image", path]),
     ...(model ? ["--model", model] : []),
     ...(reasoningEffort
       ? ["-c", `model_reasoning_effort=${tomlString(reasoningEffort)}`]
       : []),
     ...(outputSchemaPath ? ["--output-schema", outputSchemaPath] : []),
-    ...(ignoreUserConfig ? ["--ignore-user-config"] : ["--profile", profile]),
-    ...(disablePlugins ? ["--disable", "plugins"] : []),
-    ...(disableShellSnapshot ? ["--disable", "shell_snapshot"] : []),
-    ...(ephemeral ? ["--ephemeral"] : []),
-    ...(ignoreRules ? ["--ignore-rules"] : []),
   ];
   const commandDetails: CodexCommandDetails = {
     executable: command,

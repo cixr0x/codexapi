@@ -1,5 +1,7 @@
 import { EventEmitter } from "node:events";
 import { access, readFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { describe, expect, it, vi } from "vitest";
 
@@ -8,6 +10,69 @@ import {
   createCodexRunner,
   type SpawnFn,
 } from "../src/codexRunner.js";
+
+const SAFE_DEFAULT_EXEC_ARGS = [
+  "exec",
+  "-",
+  "--json",
+  "--skip-git-repo-check",
+  "--sandbox",
+  "read-only",
+  "-c",
+  'approval_policy="never"',
+  "--ignore-user-config",
+  "--ignore-rules",
+  "--ephemeral",
+  "--strict-config",
+  "--disable",
+  "shell_tool",
+  "--disable",
+  "apps",
+  "--disable",
+  "plugins",
+  "--disable",
+  "shell_snapshot",
+  "--disable",
+  "browser_use",
+  "--disable",
+  "browser_use_external",
+  "--disable",
+  "browser_use_full_cdp_access",
+  "--disable",
+  "in_app_browser",
+  "--disable",
+  "computer_use",
+  "--disable",
+  "code_mode",
+  "--disable",
+  "image_generation",
+  "--disable",
+  "multi_agent",
+  "--disable",
+  "memories",
+  "--disable",
+  "hooks",
+  "--disable",
+  "tool_suggest",
+  "--disable",
+  "enable_mcp_apps",
+  "--disable",
+  "skill_mcp_dependency_install",
+  "--disable",
+  "tool_call_mcp_elicitation",
+  "--disable",
+  "code_mode_host",
+  "--disable",
+  "remote_plugin",
+  "--disable",
+  "plugin_sharing",
+  "--disable",
+  "enable_fanout",
+  "--disable",
+  "workspace_dependencies",
+  "-c",
+  'web_search="disabled"',
+];
 
 class FakeReadable extends EventEmitter {
   push(chunk: string | null): void {
@@ -79,12 +144,6 @@ describe("Codex runner", () => {
       command: "codex",
       commandArgs: [],
       workspace: "C:/workspace",
-      profile: "plain",
-      ignoreUserConfig: true,
-      disablePlugins: true,
-      disableShellSnapshot: true,
-      ephemeral: true,
-      ignoreRules: true,
       timeoutMs: 1000,
       spawn,
     });
@@ -96,22 +155,7 @@ describe("Codex runner", () => {
     await expect(resultPromise).resolves.toBe("Hi");
     expect(spawn).toHaveBeenCalledWith(
       "codex",
-      [
-        "exec",
-        "-",
-        "--json",
-        "--skip-git-repo-check",
-        "--sandbox",
-        "danger-full-access",
-        "--dangerously-bypass-approvals-and-sandbox",
-        "--ignore-user-config",
-        "--disable",
-        "plugins",
-        "--disable",
-        "shell_snapshot",
-        "--ephemeral",
-        "--ignore-rules",
-      ],
+      SAFE_DEFAULT_EXEC_ARGS,
       expect.objectContaining({
         cwd: "C:/workspace",
         shell: false,
@@ -120,6 +164,14 @@ describe("Codex runner", () => {
     );
     expect(child.stdin.write).toHaveBeenCalledWith("Hello");
     expect(child.stdin.end).toHaveBeenCalled();
+    const spawnedArgs = spawn.mock.calls[0]?.[1] ?? [];
+    expect(spawnedArgs).not.toContain("danger-full-access");
+    expect(spawnedArgs).not.toContain(
+      "--dangerously-bypass-approvals-and-sandbox",
+    );
+    expect(spawnedArgs).not.toContain("--profile");
+    expect(spawnedArgs).not.toContain("browser");
+    expect(spawnedArgs).not.toContain("tool_discovery");
   });
 
   it("returns stdout and stderr from detailed runs", async () => {
@@ -129,12 +181,6 @@ describe("Codex runner", () => {
       command: "codex",
       commandArgs: [],
       workspace: "C:/workspace",
-      profile: "plain",
-      ignoreUserConfig: true,
-      disablePlugins: true,
-      disableShellSnapshot: true,
-      ephemeral: true,
-      ignoreRules: true,
       timeoutMs: 1000,
       spawn,
     });
@@ -151,22 +197,7 @@ describe("Codex runner", () => {
       stderr: "skill loader warning",
       command: {
         executable: "codex",
-        args: [
-          "exec",
-          "-",
-          "--json",
-          "--skip-git-repo-check",
-          "--sandbox",
-          "danger-full-access",
-          "--dangerously-bypass-approvals-and-sandbox",
-          "--ignore-user-config",
-          "--disable",
-          "plugins",
-          "--disable",
-          "shell_snapshot",
-          "--ephemeral",
-          "--ignore-rules",
-        ],
+        args: SAFE_DEFAULT_EXEC_ARGS,
         cwd: "C:/workspace",
         shell: false,
       },
@@ -180,8 +211,6 @@ describe("Codex runner", () => {
       command: "codex",
       commandArgs: [],
       workspace: "C:/workspace",
-      profile: "plain",
-      ignoreUserConfig: true,
       timeoutMs: 1000,
       spawn,
     });
@@ -194,30 +223,12 @@ describe("Codex runner", () => {
     await expect(resultPromise).resolves.toMatchObject({
       stdout: "OK",
       command: {
-        args: [
-          "exec",
-          "-",
-          "--json",
-          "--skip-git-repo-check",
-          "--sandbox",
-          "danger-full-access",
-          "--dangerously-bypass-approvals-and-sandbox",
-          "--ignore-user-config",
-        ],
+        args: SAFE_DEFAULT_EXEC_ARGS,
       },
     });
     expect(spawn).toHaveBeenCalledWith(
       "codex",
-      [
-        "exec",
-        "-",
-        "--json",
-        "--skip-git-repo-check",
-        "--sandbox",
-        "danger-full-access",
-        "--dangerously-bypass-approvals-and-sandbox",
-        "--ignore-user-config",
-      ],
+      SAFE_DEFAULT_EXEC_ARGS,
       expect.objectContaining({
         stdio: ["pipe", "pipe", "pipe"],
       }),
@@ -233,8 +244,6 @@ describe("Codex runner", () => {
       command: "codex",
       commandArgs: [],
       workspace: "C:/workspace",
-      profile: "plain",
-      ignoreUserConfig: true,
       timeoutMs: 1000,
       spawn,
     });
@@ -250,18 +259,11 @@ describe("Codex runner", () => {
     expect(spawn).toHaveBeenCalledWith(
       "codex",
       [
-        "exec",
-        "-",
-        "--json",
-        "--skip-git-repo-check",
-        "--sandbox",
-        "danger-full-access",
-        "--dangerously-bypass-approvals-and-sandbox",
+        ...SAFE_DEFAULT_EXEC_ARGS,
         "--model",
         "gpt-5.4-mini",
         "-c",
         "model_reasoning_effort=\"medium\"",
-        "--ignore-user-config",
       ],
       expect.objectContaining({
         cwd: "C:/workspace",
@@ -271,14 +273,82 @@ describe("Codex runner", () => {
     );
   });
 
+  it("disables web search when the request does not opt in", async () => {
+    const child = new FakeChildProcess();
+    const spawn = createFakeSpawn(child);
+    const runner = createCodexRunner({
+      command: "codex",
+      workspace: "C:/workspace",
+      timeoutMs: 1000,
+      spawn,
+    });
+
+    const resultPromise = runner.runWithDetails!("Hello", { webSearch: false });
+    child.stdout.push("OK\n");
+    child.close(0);
+
+    await expect(resultPromise).resolves.toMatchObject({ stdout: "OK" });
+    expect(spawn.mock.calls[0]?.[1]).toEqual(SAFE_DEFAULT_EXEC_ARGS);
+  });
+
+  it("enables only native web search when the request opts in", async () => {
+    const child = new FakeChildProcess();
+    const spawn = createFakeSpawn(child);
+    const runner = createCodexRunner({
+      command: "codex",
+      workspace: "C:/workspace",
+      timeoutMs: 1000,
+      spawn,
+    });
+
+    const resultPromise = runner.runWithDetails!("Hello", { webSearch: true });
+    child.stdout.push("OK\n");
+    child.close(0);
+
+    await expect(resultPromise).resolves.toMatchObject({ stdout: "OK" });
+    expect(spawn.mock.calls[0]?.[1]).toEqual([
+      ...SAFE_DEFAULT_EXEC_ARGS.slice(0, -2),
+      "-c",
+      'web_search="live"',
+      "-c",
+      "tools.web_search=true",
+    ]);
+  });
+
+  it("attaches each locally created image path to the request", async () => {
+    const child = new FakeChildProcess();
+    const spawn = createFakeSpawn(child);
+    const runner = createCodexRunner({
+      command: "codex",
+      workspace: "C:/workspace",
+      timeoutMs: 1000,
+      spawn,
+    });
+    const imagePaths = [
+      join(tmpdir(), "codexapi-first-cover.png"),
+      join(tmpdir(), "codexapi-second-cover.webp"),
+    ];
+
+    const resultPromise = runner.runWithDetails!("Hello", { imagePaths });
+    child.stdout.push("OK\n");
+    child.close(0);
+
+    await expect(resultPromise).resolves.toMatchObject({ stdout: "OK" });
+    expect(spawn.mock.calls[0]?.[1]).toEqual([
+      ...SAFE_DEFAULT_EXEC_ARGS,
+      "--image",
+      imagePaths[0],
+      "--image",
+      imagePaths[1],
+    ]);
+  });
+
   it("parses the final message and token usage from Codex JSONL", async () => {
     const child = new FakeChildProcess();
     const spawn = createFakeSpawn(child);
     const runner = createCodexRunner({
       command: "codex",
       workspace: "C:/workspace",
-      profile: "plain",
-      ignoreUserConfig: true,
       timeoutMs: 1000,
       spawn,
     });
@@ -306,8 +376,6 @@ describe("Codex runner", () => {
     const runner = createCodexRunner({
       command: "codex",
       workspace: "C:/workspace",
-      profile: "plain",
-      ignoreUserConfig: true,
       timeoutMs: 1000,
       spawn,
     });
@@ -341,7 +409,6 @@ describe("Codex runner", () => {
       command: "codex",
       commandArgs: ["C:/codex/codex.js"],
       workspace: "C:/workspace",
-      profile: "plain",
       timeoutMs: 1000,
       spawn,
     });
@@ -357,36 +424,14 @@ describe("Codex runner", () => {
       stderr: "Something failed",
       command: {
         executable: "codex",
-        args: [
-          "C:/codex/codex.js",
-          "exec",
-          "-",
-          "--json",
-          "--skip-git-repo-check",
-          "--sandbox",
-          "danger-full-access",
-          "--dangerously-bypass-approvals-and-sandbox",
-          "--profile",
-          "plain",
-        ],
+        args: ["C:/codex/codex.js", ...SAFE_DEFAULT_EXEC_ARGS],
         cwd: "C:/workspace",
         shell: false,
       },
     });
     expect(spawn).toHaveBeenCalledWith(
       "codex",
-      [
-        "C:/codex/codex.js",
-        "exec",
-        "-",
-        "--json",
-        "--skip-git-repo-check",
-        "--sandbox",
-        "danger-full-access",
-        "--dangerously-bypass-approvals-and-sandbox",
-        "--profile",
-        "plain",
-      ],
+      ["C:/codex/codex.js", ...SAFE_DEFAULT_EXEC_ARGS],
       expect.any(Object),
     );
   });
@@ -398,7 +443,6 @@ describe("Codex runner", () => {
       command: "missing-codex",
       commandArgs: [],
       workspace: "C:/workspace",
-      profile: "plain",
       timeoutMs: 1000,
       spawn,
     });
@@ -420,7 +464,6 @@ describe("Codex runner", () => {
       command: "codex",
       commandArgs: [],
       workspace: "C:/workspace",
-      profile: "plain",
       timeoutMs: 50,
       spawn,
     });

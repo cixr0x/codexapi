@@ -1,7 +1,18 @@
+import { join, resolve } from "node:path";
+
 import { describe, expect, it } from "vitest";
-import { join } from "node:path";
 
 import { defaultCodexCommand, loadConfig } from "../src/config.js";
+
+const SAFE_WORKSPACE = resolve(process.cwd(), ".codexapi-inference-test");
+
+function loadTestConfig(
+  env: NodeJS.ProcessEnv = {},
+  cwd = process.cwd(),
+  platform: NodeJS.Platform = process.platform,
+) {
+  return loadConfig({ CODEX_WORKSPACE: SAFE_WORKSPACE, ...env }, cwd, platform);
+}
 
 describe("config", () => {
   it("uses the npm Codex node script as the default command on Windows", () => {
@@ -23,25 +34,23 @@ describe("config", () => {
     expect(defaultCodexCommand("linux")).toEqual({ command: "codex", args: [] });
   });
 
-  it("lets CODEX_COMMAND and CODEX_COMMAND_ARGS override the platform default", () => {
-    const config = loadConfig(
+  it("allows an executable override without accepting arbitrary runner arguments", () => {
+    const config = loadTestConfig(
       {
         CODEX_COMMAND: "node",
         CODEX_COMMAND_ARGS: "C:\\codex\\codex.js;--experimental-flag",
+        APPDATA: "C:\\Users\\alice\\AppData\\Roaming",
       },
       "C:/repo",
       "win32",
     );
 
     expect(config.codexCommand).toBe("node");
-    expect(config.codexCommandArgs).toEqual([
-      "C:\\codex\\codex.js",
-      "--experimental-flag",
-    ]);
+    expect(config.codexCommandArgs).toEqual([]);
   });
 
   it("parses API-level call logging config", () => {
-    const config = loadConfig(
+    const config = loadTestConfig(
       {
         CODEX_CALL_LOGGING: "true",
         CODEX_CALL_LOG_DIR: "C:\\logs\\codexapi",
@@ -55,31 +64,35 @@ describe("config", () => {
   });
 
   it("uses the fixed local development port by default", () => {
-    const config = loadConfig({}, "C:/repo", "linux");
-
-    expect(config.port).toBe(3001);
+    expect(loadTestConfig({}, "C:/repo", "linux").port).toBe(3001);
   });
 
-  it("disables Codex plugins by default for API-launched runs", () => {
-    const config = loadConfig({}, "C:/repo", "linux");
-
-    expect(config.codexDisablePlugins).toBe(true);
-  });
-
-  it("allows Codex plugin loading to be explicitly re-enabled", () => {
-    const config = loadConfig({ CODEX_DISABLE_PLUGINS: "false" }, "C:/repo", "linux");
-
-    expect(config.codexDisablePlugins).toBe(false);
-  });
-
-  it("enables lightweight Codex exec flags by default for API-launched runs", () => {
-    const config = loadConfig({}, "C:/repo", "linux");
+  it("keeps the execution backend and capability policy immutable", () => {
+    const config = loadTestConfig(
+      {
+        CODEX_PROFILE: "privileged",
+        CODEX_IGNORE_USER_CONFIG: "false",
+        CODEX_DISABLE_PLUGINS: "false",
+        CODEX_DISABLE_SHELL_SNAPSHOT: "false",
+        CODEX_EPHEMERAL: "false",
+        CODEX_IGNORE_RULES: "false",
+      },
+      "C:/repo",
+      "linux",
+    );
 
     expect(config.codexBackend).toBe("exec");
-    expect(config.codexIgnoreUserConfig).toBe(true);
-    expect(config.codexEphemeral).toBe(true);
-    expect(config.codexIgnoreRules).toBe(true);
-    expect(config.codexDisableShellSnapshot).toBe(true);
+    expect(config).not.toHaveProperty("codexProfile");
+    expect(config).not.toHaveProperty("codexIgnoreUserConfig");
+    expect(config).not.toHaveProperty("codexDisablePlugins");
+    expect(config).not.toHaveProperty("codexDisableShellSnapshot");
+    expect(config).not.toHaveProperty("codexEphemeral");
+    expect(config).not.toHaveProperty("codexIgnoreRules");
+  });
+
+  it("uses the configured model defaults", () => {
+    const config = loadTestConfig({}, "C:/repo", "linux");
+
     expect(config.codexDefaultModel).toBe("gpt-5.4-mini");
     expect(config.codexAllowedModels).toEqual([
       "gpt-5.6-sol",
@@ -93,57 +106,35 @@ describe("config", () => {
     expect(config.codexReasoningEffort).toBe("medium");
   });
 
-  it("allows lightweight Codex exec flags to be explicitly disabled", () => {
-    const config = loadConfig(
-      {
-        CODEX_IGNORE_USER_CONFIG: "false",
-        CODEX_EPHEMERAL: "false",
-        CODEX_IGNORE_RULES: "false",
-        CODEX_DISABLE_SHELL_SNAPSHOT: "false",
-      },
-      "C:/repo",
-      "linux",
-    );
-
-    expect(config.codexIgnoreUserConfig).toBe(false);
-    expect(config.codexEphemeral).toBe(false);
-    expect(config.codexIgnoreRules).toBe(false);
-    expect(config.codexDisableShellSnapshot).toBe(false);
-  });
-
   it("disables call logging by default", () => {
-    const config = loadConfig({}, "C:/repo", "linux");
+    const config = loadTestConfig({}, "C:/repo", "linux");
 
     expect(config.callLoggingEnabled).toBe(false);
     expect(config.callLogDir).toBe(join("C:/repo", ".codexapi", "logs"));
   });
 
-  it("parses the experimental app-server backend config", () => {
-    const config = loadConfig(
-      {
-        CODEX_BACKEND: "app-server",
-        CODEX_APP_SERVER_URL: "ws://127.0.0.1:3032",
-        CODEX_APP_SERVER_PORT: "4567",
-        CODEX_APP_SERVER_START_TIMEOUT_MS: "5000",
-        CODEX_APP_SERVER_DISABLE_APPS: "false",
-        CODEX_APP_SERVER_DISABLE_NODE_REPL_MCP: "false",
-      },
-      "C:/repo",
-      "linux",
-    );
+  it("rejects the app-server backend", () => {
+    expect(() =>
+      loadTestConfig({ CODEX_BACKEND: "app-server" }, "C:/repo", "linux"),
+    ).toThrow("CODEX_BACKEND only supports exec.");
+  });
 
-    expect(config.codexBackend).toBe("app-server");
-    expect(config.codexAppServerUrl).toBe("ws://127.0.0.1:3032");
-    expect(config.codexAppServerPort).toBe(4567);
-    expect(config.codexAppServerStartTimeoutMs).toBe(5000);
-    expect(config.codexAppServerDisableApps).toBe(false);
-    expect(config.codexAppServerDisableNodeReplMcp).toBe(false);
+  it("rejects the repository/current working directory as the Codex workspace", () => {
+    expect(() =>
+      loadConfig({ CODEX_WORKSPACE: process.cwd() }, process.cwd(), process.platform),
+    ).toThrow("CODEX_WORKSPACE must be a dedicated inference directory.");
+  });
+
+  it("requires an explicitly configured Codex workspace", () => {
+    expect(() => loadConfig({}, process.cwd(), process.platform)).toThrow(
+      "CODEX_WORKSPACE must be an absolute path.",
+    );
   });
 
   it.each(["low", "max", "ultra"])(
     "parses Codex reasoning effort config value %s",
     (effort) => {
-      const config = loadConfig(
+      const config = loadTestConfig(
         { CODEX_REASONING_EFFORT: effort },
         "C:/repo",
         "linux",
@@ -154,7 +145,7 @@ describe("config", () => {
   );
 
   it("parses Codex default and allowed model config", () => {
-    const config = loadConfig(
+    const config = loadTestConfig(
       {
         CODEX_DEFAULT_MODEL: "custom-fast",
         CODEX_ALLOWED_MODELS: "custom-fast, custom-deep; gpt-5.5",
@@ -168,14 +159,14 @@ describe("config", () => {
   });
 
   it("rejects unsupported Codex backend names", () => {
-    expect(() => loadConfig({ CODEX_BACKEND: "sidecar" }, "C:/repo", "linux")).toThrow(
-      "CODEX_BACKEND must be one of: exec, app-server.",
-    );
+    expect(() =>
+      loadTestConfig({ CODEX_BACKEND: "sidecar" }, "C:/repo", "linux"),
+    ).toThrow("CODEX_BACKEND only supports exec.");
   });
 
   it("rejects unsupported Codex reasoning effort values", () => {
     expect(() =>
-      loadConfig({ CODEX_REASONING_EFFORT: "maximum" }, "C:/repo", "linux"),
+      loadTestConfig({ CODEX_REASONING_EFFORT: "maximum" }, "C:/repo", "linux"),
     ).toThrow(
       "CODEX_REASONING_EFFORT must be one of: low, medium, high, xhigh, max, ultra.",
     );

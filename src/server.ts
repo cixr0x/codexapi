@@ -3,7 +3,6 @@ import Fastify, { type FastifyInstance, type FastifyReply } from "fastify";
 import { randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
 
-import { createAppServerCodexRunner } from "./appServerRunner.js";
 import { createCallLogger, type CallLogger, type CallLogEntry } from "./callLogger.js";
 import {
   CODEX_REASONING_EFFORTS,
@@ -381,32 +380,10 @@ function hasCodexRunOptions(options: CodexRunOptions): boolean {
 }
 
 function createConfiguredCodexRunner(config: AppConfig): CodexRunner {
-  if (config.codexBackend === "app-server") {
-    return createAppServerCodexRunner({
-      command: config.codexCommand,
-      commandArgs: config.codexCommandArgs,
-      workspace: config.codexWorkspace,
-      timeoutMs: config.codexTimeoutMs,
-      appServerUrl: config.codexAppServerUrl,
-      managedPort: config.codexAppServerPort,
-      startTimeoutMs: config.codexAppServerStartTimeoutMs,
-      disableApps: config.codexAppServerDisableApps,
-      disablePlugins: config.codexDisablePlugins,
-      disableShellSnapshot: config.codexDisableShellSnapshot,
-      disableNodeReplMcp: config.codexAppServerDisableNodeReplMcp,
-    });
-  }
-
   return createCodexRunner({
     command: config.codexCommand,
     commandArgs: config.codexCommandArgs,
     workspace: config.codexWorkspace,
-    profile: config.codexProfile,
-    ignoreUserConfig: config.codexIgnoreUserConfig,
-    disablePlugins: config.codexDisablePlugins,
-    disableShellSnapshot: config.codexDisableShellSnapshot,
-    ephemeral: config.codexEphemeral,
-    ignoreRules: config.codexIgnoreRules,
     timeoutMs: config.codexTimeoutMs,
   });
 }

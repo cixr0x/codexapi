@@ -1,6 +1,8 @@
 import { join, win32 } from "node:path";
 
-export type CodexBackend = "exec" | "app-server";
+import { assertSafeExecutionConfig } from "./executionPolicy.js";
+
+export type CodexBackend = "exec";
 export const CODEX_REASONING_EFFORTS = [
   "low",
   "medium",
@@ -18,21 +20,10 @@ export interface AppConfig {
   codexWorkspace: string;
   codexCommand: string;
   codexCommandArgs: string[];
-  codexProfile: string;
-  codexIgnoreUserConfig: boolean;
-  codexDisablePlugins: boolean;
-  codexDisableShellSnapshot: boolean;
-  codexEphemeral: boolean;
-  codexIgnoreRules: boolean;
   codexTimeoutMs: number;
   codexDefaultModel: string;
   codexAllowedModels: string[];
   codexReasoningEffort: CodexReasoningEffort;
-  codexAppServerUrl?: string;
-  codexAppServerPort: number;
-  codexAppServerStartTimeoutMs: number;
-  codexAppServerDisableApps: boolean;
-  codexAppServerDisableNodeReplMcp: boolean;
   callLoggingEnabled: boolean;
   callLogDir: string;
 }
@@ -49,21 +40,13 @@ export function loadConfig(
 ): AppConfig {
   const defaultCommand = defaultCodexCommand(platform, env, process.execPath);
 
-  return {
+  const config: AppConfig = {
     host: env.HOST ?? "127.0.0.1",
     port: parseInteger(env.PORT, 3001, "PORT"),
     codexBackend: parseCodexBackend(env.CODEX_BACKEND),
-    codexWorkspace: env.CODEX_WORKSPACE ?? cwd,
+    codexWorkspace: env.CODEX_WORKSPACE ?? "",
     codexCommand: env.CODEX_COMMAND ?? defaultCommand.command,
-    codexCommandArgs: env.CODEX_COMMAND_ARGS
-      ? parseCommandArgs(env.CODEX_COMMAND_ARGS)
-      : defaultCommand.args,
-    codexProfile: env.CODEX_PROFILE ?? "plain",
-    codexIgnoreUserConfig: parseBoolean(env.CODEX_IGNORE_USER_CONFIG, true),
-    codexDisablePlugins: parseBoolean(env.CODEX_DISABLE_PLUGINS, true),
-    codexDisableShellSnapshot: parseBoolean(env.CODEX_DISABLE_SHELL_SNAPSHOT, true),
-    codexEphemeral: parseBoolean(env.CODEX_EPHEMERAL, true),
-    codexIgnoreRules: parseBoolean(env.CODEX_IGNORE_RULES, true),
+    codexCommandArgs: env.CODEX_COMMAND ? [] : defaultCommand.args,
     codexTimeoutMs: parseInteger(env.CODEX_TIMEOUT_MS, 120000, "CODEX_TIMEOUT_MS"),
     codexDefaultModel: parseString(env.CODEX_DEFAULT_MODEL, "gpt-5.4-mini"),
     codexAllowedModels: parseList(env.CODEX_ALLOWED_MODELS, [
@@ -76,26 +59,12 @@ export function loadConfig(
       "gpt-5.3-codex-spark",
     ]),
     codexReasoningEffort: parseCodexReasoningEffort(env.CODEX_REASONING_EFFORT),
-    codexAppServerUrl: env.CODEX_APP_SERVER_URL?.trim() || undefined,
-    codexAppServerPort: parseInteger(
-      env.CODEX_APP_SERVER_PORT,
-      0,
-      "CODEX_APP_SERVER_PORT",
-      { allowZero: true },
-    ),
-    codexAppServerStartTimeoutMs: parseInteger(
-      env.CODEX_APP_SERVER_START_TIMEOUT_MS,
-      10000,
-      "CODEX_APP_SERVER_START_TIMEOUT_MS",
-    ),
-    codexAppServerDisableApps: parseBoolean(env.CODEX_APP_SERVER_DISABLE_APPS, true),
-    codexAppServerDisableNodeReplMcp: parseBoolean(
-      env.CODEX_APP_SERVER_DISABLE_NODE_REPL_MCP,
-      true,
-    ),
     callLoggingEnabled: parseBoolean(env.CODEX_CALL_LOGGING, false),
     callLogDir: env.CODEX_CALL_LOG_DIR ?? join(cwd, ".codexapi", "logs"),
   };
+
+  assertSafeExecutionConfig(config);
+  return config;
 }
 
 export function defaultCodexCommand(
@@ -150,13 +119,6 @@ function parseInteger(
   return parsed;
 }
 
-function parseCommandArgs(value: string): string[] {
-  return value
-    .split(";")
-    .map((part) => part.trim())
-    .filter(Boolean);
-}
-
 function parseList(value: string | undefined, fallback: string[]): string[] {
   if (value == null || value === "") {
     return fallback;
@@ -184,15 +146,11 @@ function parseBoolean(value: string | undefined, fallback: boolean): boolean {
 }
 
 function parseCodexBackend(value: string | undefined): CodexBackend {
-  if (value == null || value === "") {
+  if (value == null || value === "" || value === "exec") {
     return "exec";
   }
 
-  if (value === "exec" || value === "app-server") {
-    return value;
-  }
-
-  throw new Error("CODEX_BACKEND must be one of: exec, app-server.");
+  throw new Error("CODEX_BACKEND only supports exec.");
 }
 
 function parseCodexReasoningEffort(value: string | undefined): CodexReasoningEffort {
