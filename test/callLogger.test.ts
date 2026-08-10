@@ -52,33 +52,29 @@ describe("call logger", () => {
         shell: false,
       },
       outputText: "OK",
+      webSearchEnabled: true,
+      imageDiagnosticCode: "none",
       durationMs: 12,
       statusCode: 200,
     });
 
     const content = await readFile(join(dir, "calls.jsonl"), "utf8");
     expect(content.trim().split("\n")).toHaveLength(1);
-    expect(JSON.parse(content)).toMatchObject({
+    const entry = JSON.parse(content);
+    expect(entry).toEqual({
       id: "call_123",
+      timestamp: "2026-06-24T00:00:00.000Z",
       endpoint: "/v1/responses",
-      rawStderr: "skill loaded",
-      codexCommand: {
-        executable: "codex",
-        args: [
-          "exec",
-          "input: Hello",
-          "--skip-git-repo-check",
-          "--sandbox",
-          "danger-full-access",
-          "--dangerously-bypass-approvals-and-sandbox",
-          "--profile",
-          "plain",
-        ],
-        cwd: "C:/workspace",
-        shell: false,
-      },
+      method: "POST",
+      model: "local-codex",
+      webSearchEnabled: true,
+      imageDiagnosticCode: "none",
+      durationMs: 12,
       statusCode: 200,
     });
+    expect(content).not.toContain("input: Hello");
+    expect(content).not.toContain("skill loaded");
+    expect(content).not.toContain("C:/workspace");
   });
 
   it("does not create a log file when disabled", async () => {
@@ -92,6 +88,8 @@ describe("call logger", () => {
       method: "POST",
       model: "local-codex",
       requestBody: {},
+      webSearchEnabled: false,
+      imageDiagnosticCode: "none",
       durationMs: 1,
       statusCode: 200,
     });

@@ -6,6 +6,7 @@ import {
   buildResponsesPrompt,
   createChatCompletion,
   createResponse,
+  normalizeResponsesRequest,
 } from "../src/openaiCompat.js";
 import { StructuredOutputError } from "../src/structuredOutput.js";
 
@@ -20,6 +21,80 @@ const responseSchema = {
 };
 
 describe("OpenAI compatibility mapping", () => {
+  it.each([
+    ["absent tools", { input: "Hello" }, false],
+    ["an empty tools array", { input: "Hello", tools: [] }, false],
+    ["one web search tool", { input: "Hello", tools: [{ type: "web_search" }] }, true],
+    [
+      "one web search tool with auto choice",
+      { input: "Hello", tools: [{ type: "web_search" }], tool_choice: "auto" },
+      true,
+    ],
+  ])("normalizes Responses requests with %s", (_name, body, webSearch) => {
+    expect(normalizeResponsesRequest(body)).toEqual({
+      prompt: "input: Hello",
+      webSearch,
+      imageUrl: null,
+    });
+  });
+
+  it.each([
+    ["duplicate web search", [{ type: "web_search" }, { type: "web_search" }]],
+    ["web search preview", [{ type: "web_search_preview" }]],
+    ["function", [{ type: "function", name: "lookup" }]],
+    ["shell", [{ type: "shell" }]],
+    ["a non-array tools value", { type: "web_search" }],
+    ["a malformed tool", ["web_search"]],
+  ])("rejects Responses %s tools", (_name, tools) => {
+    expect(() => normalizeResponsesRequest({ input: "Hello", tools })).toThrow(
+      expect.objectContaining({
+        statusCode: 400,
+        body: expect.objectContaining({
+          error: expect.objectContaining({ type: "invalid_request_error", param: "tools" }),
+        }),
+      }),
+    );
+  });
+
+  it("rejects non-auto Responses tool choice", () => {
+    expect(() =>
+      normalizeResponsesRequest({
+        input: "Hello",
+        tools: [{ type: "web_search" }],
+        tool_choice: "required",
+      }),
+    ).toThrow(
+      expect.objectContaining({
+        statusCode: 400,
+        body: expect.objectContaining({
+          error: expect.objectContaining({
+            type: "invalid_request_error",
+            param: "tool_choice",
+          }),
+        }),
+      }),
+    );
+  });
+
+  it.each([
+    ["tools", { tools: [{ type: "web_search" }] }],
+    ["tool choice", { tool_choice: "auto" }],
+  ])("rejects chat completion %s before prompt construction", (name, extension) => {
+    expect(() =>
+      buildChatPrompt({ messages: [{ role: "user", content: "Hello" }], ...extension }),
+    ).toThrow(
+      expect.objectContaining({
+        statusCode: 400,
+        body: expect.objectContaining({
+          error: expect.objectContaining({
+            type: "invalid_request_error",
+            param: name === "tools" ? "tools" : "tool_choice",
+          }),
+        }),
+      }),
+    );
+  });
+
   it("converts chat messages into a role-labeled prompt ending with an assistant cue", () => {
     const prompt = buildChatPrompt({
       model: "local-codex",

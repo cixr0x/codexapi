@@ -15,6 +15,8 @@ export interface CallLogEntry {
   rawStdout?: string;
   rawStderr?: string;
   outputText?: string;
+  webSearchEnabled: boolean;
+  imageDiagnosticCode: "none";
   durationMs: number;
   statusCode: number;
   error?: {
@@ -45,9 +47,32 @@ export function createCallLogger({
       await mkdir(logDir, { recursive: true });
       await appendFile(
         join(logDir, "calls.jsonl"),
-        `${JSON.stringify(entry)}\n`,
+        `${JSON.stringify(toBoundedLogEntry(entry))}\n`,
         "utf8",
       );
     },
+  };
+}
+
+function toBoundedLogEntry(entry: CallLogEntry) {
+  return {
+    id: entry.id,
+    timestamp: entry.timestamp,
+    endpoint: entry.endpoint,
+    method: entry.method,
+    ...(entry.model === undefined ? {} : { model: entry.model }),
+    webSearchEnabled: entry.webSearchEnabled,
+    imageDiagnosticCode: entry.imageDiagnosticCode,
+    durationMs: entry.durationMs,
+    statusCode: entry.statusCode,
+    ...(entry.error === undefined
+      ? {}
+      : {
+          error: {
+            type: entry.error.type,
+            param: entry.error.param,
+            code: entry.error.code,
+          },
+        }),
   };
 }

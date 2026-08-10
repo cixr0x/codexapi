@@ -107,7 +107,17 @@ describe("Fastify server", () => {
     const response = await app.inject({ method: "GET", url: "/health" });
 
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual({ status: "ok" });
+    expect(response.json()).toMatchObject({
+      status: "ok",
+      executionPolicy: {
+        backend: "exec",
+        sandbox: "read-only",
+        approvalPolicy: "never",
+        mcpServers: "disabled",
+      },
+    });
+    expect(response.body).not.toContain("C:/workspace");
+    expect(response.body).not.toContain("C:/codex-home");
     await app.close();
   });
 
@@ -169,6 +179,8 @@ describe("Fastify server", () => {
     expect(runWithDetails).toHaveBeenCalledWith("user: Hello\nassistant:", {
       model: "gpt-5.4-mini",
       reasoningEffort: "medium",
+      webSearch: false,
+      imagePaths: [],
     });
     await app.close();
   });
@@ -208,7 +220,74 @@ describe("Fastify server", () => {
     expect(runWithDetails).toHaveBeenCalledWith("input: Hello", {
       model: "gpt-5.5",
       reasoningEffort: "medium",
+      webSearch: false,
+      imagePaths: [],
     });
+    await app.close();
+  });
+
+  it("passes the supported Responses web search capability to Codex", async () => {
+    const { runner, runWithDetails } = fakeDetailedRunner("Response from Codex");
+    const app = createServer({ config: testConfig(), runner });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/responses",
+      payload: {
+        model: "gpt-5.5",
+        input: "Find the current documentation.",
+        tools: [{ type: "web_search" }],
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(runWithDetails).toHaveBeenCalledWith("input: Find the current documentation.", {
+      model: "gpt-5.5",
+      reasoningEffort: "medium",
+      webSearch: true,
+      imagePaths: [],
+    });
+    await app.close();
+  });
+
+  it.each([
+    [
+      "unsupported Responses tools",
+      "/v1/responses",
+      { input: "Hello", tools: [{ type: "function", name: "lookup" }] },
+      "tools",
+    ],
+    [
+      "unsupported Responses tool choice",
+      "/v1/responses",
+      { input: "Hello", tools: [{ type: "web_search" }], tool_choice: "required" },
+      "tool_choice",
+    ],
+    [
+      "chat tools",
+      "/v1/chat/completions",
+      { messages: [{ role: "user", content: "Hello" }], tools: [{ type: "web_search" }] },
+      "tools",
+    ],
+    [
+      "chat tool choice",
+      "/v1/chat/completions",
+      { messages: [{ role: "user", content: "Hello" }], tool_choice: "auto" },
+      "tool_choice",
+    ],
+  ])("returns 400 before invoking Codex for %s", async (_name, url, payload, param) => {
+    const { runner, runWithDetails } = fakeDetailedRunner();
+    const app = createServer({ config: testConfig(), runner });
+
+    const response = await app.inject({
+      method: "POST",
+      url,
+      payload: { model: "gpt-5.4-mini", ...payload },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({ error: { type: "invalid_request_error", param } });
+    expect(runWithDetails).not.toHaveBeenCalled();
     await app.close();
   });
 
@@ -229,6 +308,8 @@ describe("Fastify server", () => {
     expect(chat.runWithDetails).toHaveBeenCalledWith("user: Hello\nassistant:", {
       model: "gpt-5.6-sol",
       reasoningEffort: "high",
+      webSearch: false,
+      imagePaths: [],
     });
     await chatApp.close();
 
@@ -251,6 +332,8 @@ describe("Fastify server", () => {
     expect(responses.runWithDetails).toHaveBeenCalledWith("input: Hello", {
       model: "gpt-5.6-sol",
       reasoningEffort: "max",
+      webSearch: false,
+      imagePaths: [],
     });
     expect(responsesResponse.json()).toMatchObject({
       model: "gpt-5.6-sol",
@@ -329,6 +412,8 @@ describe("Fastify server", () => {
     expect(runWithDetails).toHaveBeenCalledWith("input: Hello", {
       model: "gpt-5.4-mini",
       reasoningEffort: "medium",
+      webSearch: false,
+      imagePaths: [],
     });
     await app.close();
   });
@@ -412,38 +497,25 @@ describe("Fastify server", () => {
     expect(runWithDetails).toHaveBeenCalledWith("input: Hello", {
       model: "gpt-5.4-mini",
       reasoningEffort: "medium",
+      webSearch: false,
+      imagePaths: [],
     });
 
     const logContent = await readFile(join(logDir, "calls.jsonl"), "utf8");
     const entry = JSON.parse(logContent);
-    expect(entry).toMatchObject({
+    expect(entry).toEqual({
+      id: expect.stringMatching(/^call_/),
+      timestamp: expect.any(String),
       endpoint: "/v1/responses",
       method: "POST",
       model: "gpt-5.4-mini",
-      requestBody: { model: "gpt-5.4-mini", input: "Hello" },
-      prompt: "input: Hello",
-      rawStdout: "raw codex events",
-      rawStderr: "skill log",
-      codexCommand: {
-        executable: "codex",
-        args: [
-          "exec",
-          "input: Hello",
-          "--skip-git-repo-check",
-          "--sandbox",
-          "danger-full-access",
-          "--dangerously-bypass-approvals-and-sandbox",
-          "--profile",
-          "plain",
-        ],
-        cwd: "C:/workspace",
-        shell: false,
-      },
-      outputText: "Response from Codex",
+      webSearchEnabled: false,
+      imageDiagnosticCode: "none",
+      durationMs: expect.any(Number),
       statusCode: 200,
     });
-    expect(entry.id).toMatch(/^call_/);
-    expect(typeof entry.durationMs).toBe("number");
+    expect(logContent).not.toContain("raw codex events");
+    expect(logContent).not.toContain("C:/workspace");
     await app.close();
   });
 

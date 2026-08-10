@@ -58,6 +58,7 @@ export function openAiError(
 export function buildChatPrompt(body: unknown): string {
   const request = requireRecord(body, "Request body must be a JSON object.");
   rejectStreaming(request);
+  rejectChatTools(request);
 
   const messages = request.messages;
   if (!Array.isArray(messages) || messages.length === 0) {
@@ -93,8 +94,19 @@ export function buildChatPrompt(body: unknown): string {
 }
 
 export function buildResponsesPrompt(body: unknown): string {
+  return normalizeResponsesRequest(body).prompt;
+}
+
+export interface NormalizedResponsesRequest {
+  prompt: string;
+  webSearch: boolean;
+  imageUrl: string | null;
+}
+
+export function normalizeResponsesRequest(body: unknown): NormalizedResponsesRequest {
   const request = requireRecord(body, "Request body must be a JSON object.");
   rejectStreaming(request);
+  const webSearch = parseWebSearch(request);
 
   if (!Object.prototype.hasOwnProperty.call(request, "input")) {
     throw openAiError(
@@ -116,7 +128,11 @@ export function buildResponsesPrompt(body: unknown): string {
     lines.push(buildStructuredOutputInstructions(format));
   }
 
-  return lines.join("\n");
+  return {
+    prompt: lines.join("\n"),
+    webSearch,
+    imageUrl: null,
+  };
 }
 
 export function createChatCompletion({
@@ -246,6 +262,54 @@ function rejectStreaming(request: JsonRecord): void {
       "unsupported_streaming",
     );
   }
+}
+
+function rejectChatTools(request: JsonRecord): void {
+  if (request.tools !== undefined) {
+    throw openAiError(
+      "Chat completion tools are not supported.",
+      "invalid_request_error",
+      "tools",
+    );
+  }
+
+  if (request.tool_choice !== undefined) {
+    throw openAiError(
+      "Chat completion tool_choice is not supported.",
+      "invalid_request_error",
+      "tool_choice",
+    );
+  }
+}
+
+function parseWebSearch(body: JsonRecord): boolean {
+  if (body.tools === undefined || (Array.isArray(body.tools) && body.tools.length === 0)) {
+    return false;
+  }
+
+  if (
+    !Array.isArray(body.tools) ||
+    body.tools.length !== 1 ||
+    !isRecord(body.tools[0]) ||
+    Object.keys(body.tools[0]).length !== 1 ||
+    body.tools[0].type !== "web_search"
+  ) {
+    throw openAiError(
+      "Only one web_search tool is supported.",
+      "invalid_request_error",
+      "tools",
+    );
+  }
+
+  if (body.tool_choice !== undefined && body.tool_choice !== "auto") {
+    throw openAiError(
+      'tool_choice must be "auto".',
+      "invalid_request_error",
+      "tool_choice",
+    );
+  }
+
+  return true;
 }
 
 function formatResponseInput(input: unknown): string[] {

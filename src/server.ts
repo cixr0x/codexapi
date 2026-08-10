@@ -18,13 +18,13 @@ import {
   type CodexRunResult,
   type CodexRunner,
 } from "./codexRunner.js";
-import { assertSafeExecutionConfig } from "./executionPolicy.js";
+import { assertSafeExecutionConfig, executionPolicyHealth } from "./executionPolicy.js";
 import {
   OpenAIHttpError,
   buildChatPrompt,
-  buildResponsesPrompt,
   createChatCompletion,
   createResponse,
+  normalizeResponsesRequest,
   openAiError,
 } from "./openaiCompat.js";
 import {
@@ -74,7 +74,10 @@ export function createServer(options: CreateServerOptions = {}): FastifyInstance
     );
   });
 
-  app.get("/health", async () => ({ status: "ok" }));
+  app.get("/health", async () => ({
+    status: "ok",
+    executionPolicy: executionPolicyHealth(),
+  }));
 
   app.get("/", async (_request, reply) => {
     reply.type("text/html; charset=utf-8").send(webUiHtml);
@@ -96,6 +99,7 @@ export function createServer(options: CreateServerOptions = {}): FastifyInstance
     let prompt: string | undefined;
     let runResult: CodexRunResult | undefined;
     let selectedModel: string | undefined;
+    let webSearchEnabled = false;
 
     try {
       prompt = buildChatPrompt(request.body);
@@ -117,9 +121,11 @@ export function createServer(options: CreateServerOptions = {}): FastifyInstance
         prompt,
         codexCommand: runResult.command,
         rawStdout: runResult.rawStdout ?? runResult.stdout,
-        rawStderr: runResult.stderr,
-        outputText: runResult.stdout,
-        statusCode: 200,
+      rawStderr: runResult.stderr,
+      outputText: runResult.stdout,
+      webSearchEnabled,
+      imageDiagnosticCode: "none",
+      statusCode: 200,
       });
       return responseBody;
     } catch (error) {
@@ -136,6 +142,8 @@ export function createServer(options: CreateServerOptions = {}): FastifyInstance
         rawStdout:
           runResult?.rawStdout ?? runResult?.stdout ?? runnerErrorStdout(error),
         rawStderr: runResult?.stderr ?? runnerErrorStderr(error),
+        webSearchEnabled,
+        imageDiagnosticCode: "none",
         statusCode: mappedError.statusCode,
         error: mappedError.body.error,
       });
@@ -152,13 +160,21 @@ export function createServer(options: CreateServerOptions = {}): FastifyInstance
     let outputText: string | undefined;
     let selectedModel: string | undefined;
     let reasoningEffort: string | undefined;
+    let webSearchEnabled = false;
 
     try {
-      prompt = buildResponsesPrompt(request.body);
+      const normalizedRequest = normalizeResponsesRequest(request.body);
+      prompt = normalizedRequest.prompt;
       const format = getResponseTextFormat(request.body);
-      const codexOptions = codexOptionsForResponses(request.body, config, format);
+      const codexOptions = codexOptionsForResponses(
+        request.body,
+        config,
+        format,
+        normalizedRequest.webSearch,
+      );
       selectedModel = codexOptions.model ?? config.codexDefaultModel;
       reasoningEffort = codexOptions.reasoningEffort;
+      webSearchEnabled = normalizedRequest.webSearch;
       runResult = await runPromptWithDetails(runner, prompt, codexOptions);
       outputText = normalizeStructuredOutput(runResult.stdout, format);
       const responseBody = createResponse({
@@ -180,6 +196,8 @@ export function createServer(options: CreateServerOptions = {}): FastifyInstance
         rawStdout: runResult.rawStdout ?? runResult.stdout,
         rawStderr: runResult.stderr,
         outputText,
+        webSearchEnabled,
+        imageDiagnosticCode: "none",
         statusCode: 200,
       });
       return responseBody;
@@ -198,6 +216,8 @@ export function createServer(options: CreateServerOptions = {}): FastifyInstance
           runResult?.rawStdout ?? runResult?.stdout ?? runnerErrorStdout(error),
         rawStderr: runResult?.stderr ?? runnerErrorStderr(error),
         outputText,
+        webSearchEnabled,
+        imageDiagnosticCode: "none",
         statusCode: mappedError.statusCode,
         error: mappedError.body.error,
       });
@@ -281,6 +301,8 @@ function codexOptionsForChat(body: unknown, config: AppConfig): CodexRunOptions 
       "reasoning_effort",
       config,
     ),
+    webSearch: false,
+    imagePaths: [],
   };
 }
 
@@ -288,6 +310,7 @@ function codexOptionsForResponses(
   body: unknown,
   config: AppConfig,
   format: ResponseTextFormat | null,
+  webSearch: boolean,
 ): CodexRunOptions {
   const options: CodexRunOptions = {
     model: selectCodexModel(requestModel(body), config),
@@ -296,6 +319,8 @@ function codexOptionsForResponses(
       "reasoning.effort",
       config,
     ),
+    webSearch,
+    imagePaths: [],
   };
   const outputSchema = outputSchemaForFormat(format);
   if (outputSchema !== undefined) {
@@ -377,7 +402,9 @@ function hasCodexRunOptions(options: CodexRunOptions): boolean {
   return (
     options.model !== undefined ||
     options.reasoningEffort !== undefined ||
-    options.outputSchema !== undefined
+    options.outputSchema !== undefined ||
+    options.webSearch !== undefined ||
+    options.imagePaths !== undefined
   );
 }
 
