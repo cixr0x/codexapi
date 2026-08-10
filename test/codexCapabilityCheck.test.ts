@@ -120,9 +120,11 @@ describe("Codex capability startup check", () => {
     expect(spawn.calls[1]?.[1]).toEqual(
       expect.arrayContaining(["features", "list", "--disable", "shell_tool"]),
     );
+    expect(spawn.calls[1]?.[1]).not.toContain("--strict-config");
     expect(spawn.calls[2]?.[1]).toEqual(
       expect.arrayContaining(["mcp", "list", "--json", "mcp_servers={}"]),
     );
+    expect(spawn.calls[2]?.[1]).not.toContain("--strict-config");
   });
 
   it.each([
@@ -187,6 +189,30 @@ describe("Codex capability startup check", () => {
     await expect(assertCodexCapabilities(testConfig(), spawn)).rejects.toThrow(
       /shell_tool feature is incompatible/i,
     );
+  });
+
+  it("rejects shell_tool reported enabled despite the disable override", async () => {
+    const spawn = createProbeSpawn([
+      { stdout: "codex-cli 0.144.1\n" },
+      { stdout: "shell_tool stable true\n" },
+    ]);
+
+    await expect(assertCodexCapabilities(testConfig(), spawn)).rejects.toThrow(
+      /shell_tool feature is enabled/i,
+    );
+    expect(spawn.calls).toHaveLength(2);
+  });
+
+  it("fails closed when multibyte probe output exceeds the 64 KiB byte cap", async () => {
+    const spawn = createProbeSpawn([
+      { stdout: "codex-cli 0.144.1\n" },
+      { stdout: `shell_tool stable false\n${"é".repeat(64 * 1024)}` },
+    ]);
+
+    await expect(assertCodexCapabilities(testConfig(), spawn)).rejects.toThrow(
+      /feature probe output exceeded 65536 bytes/i,
+    );
+    expect(spawn.calls).toHaveLength(2);
   });
 
   it("rejects a nonempty MCP inventory", async () => {

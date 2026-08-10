@@ -82,7 +82,6 @@ function capabilityPolicyArgs(): string[] {
     `approval_policy=${tomlString(CODEX_EXECUTION_POLICY.approvalPolicy)}`,
     "-c",
     "mcp_servers={}",
-    "--strict-config",
     ...CODEX_EXECUTION_POLICY.disabledFeatures.flatMap((feature) => [
       "--disable",
       feature,
@@ -118,12 +117,17 @@ function runProbe(
     let timeout: ReturnType<typeof setTimeout> | undefined;
     let child: ChildProcess | undefined;
     let terminating = false;
+    let outputExceeded = false;
 
     const onStdout = (chunk: Buffer | string) => {
-      stdout = appendBounded(stdout, chunk);
+      const appended = appendBounded(stdout, chunk);
+      stdout = appended.value;
+      outputExceeded ||= appended.exceeded;
     };
     const onStderr = (chunk: Buffer | string) => {
-      stderr = appendBounded(stderr, chunk);
+      const appended = appendBounded(stderr, chunk);
+      stderr = appended.value;
+      outputExceeded ||= appended.exceeded;
     };
     const onError = (error: Error) => {
       if (terminating) {
@@ -150,6 +154,14 @@ function runProbe(
       }
 
       settle(() => {
+        if (outputExceeded) {
+          reject(
+            new Error(
+              `Codex ${name} probe output exceeded ${MAX_PROBE_OUTPUT_BYTES} bytes.`,
+            ),
+          );
+          return;
+        }
         if (code !== 0) {
           reject(new Error(`Codex ${name} probe exited with code ${code ?? "unknown"}.`));
           return;
@@ -296,10 +308,14 @@ function parseShellToolFeature(output: string): "stable" | "experimental" {
   if (
     name === "shell_tool" &&
     (feature === "stable" || feature === "experimental") &&
-    (enabled === "true" || enabled === "false") &&
     rows[0]!.length === 3
   ) {
-    return feature;
+    if (enabled === "false") {
+      return feature;
+    }
+    if (enabled === "true") {
+      throw new Error("Codex shell_tool feature is enabled despite the disable policy.");
+    }
   }
 
   throw new Error("Codex shell_tool feature is incompatible with this policy.");
@@ -326,17 +342,24 @@ function assertEmptyMcpInventory(output: string): void {
   throw new Error("Codex MCP inventory is not empty or was not recognized.");
 }
 
-function appendBounded(current: string, chunk: Buffer | string): string {
-  if (Buffer.byteLength(current, "utf8") >= MAX_PROBE_OUTPUT_BYTES) {
-    return current;
+function appendBounded(
+  current: string,
+  chunk: Buffer | string,
+): { value: string; exceeded: boolean } {
+  const remainingBytes = MAX_PROBE_OUTPUT_BYTES - Buffer.byteLength(current, "utf8");
+  const sourceBytes = Buffer.isBuffer(chunk)
+    ? chunk.byteLength
+    : Buffer.byteLength(chunk, "utf8");
+  if (sourceBytes > remainingBytes) {
+    return { value: current, exceeded: true };
   }
 
-  const next = current + chunk.toString();
-  if (Buffer.byteLength(next, "utf8") <= MAX_PROBE_OUTPUT_BYTES) {
-    return next;
+  const text = chunk.toString();
+  if (Buffer.byteLength(text, "utf8") > remainingBytes) {
+    return { value: current, exceeded: true };
   }
 
-  return next.slice(0, MAX_PROBE_OUTPUT_BYTES);
+  return { value: current + text, exceeded: false };
 }
 
 function tomlString(value: string): string {
