@@ -7,3 +7,4 @@ coverage/
 .vitest/
 npm-debug.log*
 .codexapi/
+.worktrees/
