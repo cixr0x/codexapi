@@ -1,4 +1,5 @@
 import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { EventEmitter } from "node:events";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -10,7 +11,7 @@ import type {
   SafeImageReason,
   SafeRemoteImageDependencies,
 } from "../src/safeRemoteImage.js";
-import { createServer, isMainModule } from "../src/server.js";
+import { createServer, isMainModule, startServer } from "../src/server.js";
 
 const BROAD_INPUT_ITEM_COUNT = 130_000;
 
@@ -113,6 +114,71 @@ async function tempDir(): Promise<string> {
 }
 
 describe("Fastify server", () => {
+  it("rejects an unsafe direct startup config before probing or listening", async () => {
+    const { runner } = fakeRunner();
+    const spawn = vi.fn();
+    const listen = vi.fn();
+
+    await expect(startServer({ config: testConfig(), runner, spawn, listen })).rejects.toThrow(
+      "CODEX_WORKSPACE must exist as an empty directory.",
+    );
+    expect(spawn).not.toHaveBeenCalled();
+    expect(listen).not.toHaveBeenCalled();
+  });
+
+  it("attests Codex capabilities before binding the startup listener", async () => {
+    const events: string[] = [];
+    const child = new EventEmitter() as EventEmitter & {
+      stdout: EventEmitter;
+      stderr: EventEmitter;
+      kill: ReturnType<typeof vi.fn>;
+    };
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.kill = vi.fn();
+    const outputs = [
+      "codex-cli 0.144.1\n",
+      "shell_tool stable false\n",
+      "[]\n",
+    ];
+    const spawn = vi.fn(() => {
+      const output = outputs.shift();
+      queueMicrotask(() => {
+        child.stdout.emit("data", output);
+        child.emit("close", 0, null);
+      });
+      events.push("probe");
+      return child as never;
+    });
+    const { runner } = fakeRunner();
+    const listen = vi.fn(async (app: Awaited<ReturnType<typeof createServer>>) => {
+      events.push("listen");
+      const health = await app.inject({ method: "GET", url: "/health" });
+      expect(health.json()).toMatchObject({
+        codexCli: {
+          version: "0.144.1",
+          shellToolFeature: "stable",
+          checked: true,
+        },
+      });
+    });
+
+    const app = await startServer({
+      config: {
+        ...testConfig(),
+        codexWorkspace: await tempDir(),
+        codexHome: await tempDir(),
+      },
+      runner,
+      spawn,
+      listen,
+    });
+
+    expect(events).toEqual(["probe", "probe", "probe", "listen"]);
+    expect(listen).toHaveBeenCalledOnce();
+    await app.close();
+  });
+
   it("detects the entrypoint from a Windows argv path", () => {
     expect(
       isMainModule(

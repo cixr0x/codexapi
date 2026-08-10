@@ -21,7 +21,13 @@ import {
   createCodexRunner,
   type CodexRunResult,
   type CodexRunner,
+  type SpawnFn,
 } from "./codexRunner.js";
+import {
+  assertCodexCapabilities,
+  CODEX_CAPABILITY_POLICY_NAME,
+  type CodexCapabilityReport,
+} from "./codexCapabilityCheck.js";
 import { assertSafeExecutionConfig, executionPolicyHealth } from "./executionPolicy.js";
 import {
   OpenAIHttpError,
@@ -55,6 +61,12 @@ export interface CreateServerOptions {
     dependencies?: SafeRemoteImageDependencies,
   ) => Promise<PreparedRemoteImage>;
   requestSignal?: (request: FastifyRequest) => AbortSignal;
+  capabilityReport?: CodexCapabilityReport;
+}
+
+export interface StartServerOptions extends CreateServerOptions {
+  spawn?: SpawnFn;
+  listen?: (app: FastifyInstance, config: Pick<AppConfig, "host" | "port">) => Promise<unknown>;
 }
 
 export function createServer(options: CreateServerOptions = {}): FastifyInstance {
@@ -94,6 +106,8 @@ export function createServer(options: CreateServerOptions = {}): FastifyInstance
 
   app.get("/health", async () => ({
     status: "ok",
+    capabilityPolicy: CODEX_CAPABILITY_POLICY_NAME,
+    ...(options.capabilityReport ? { codexCli: options.capabilityReport } : {}),
     executionPolicy: executionPolicyHealth(),
   }));
 
@@ -556,10 +570,19 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+export async function startServer(options: StartServerOptions = {}): Promise<FastifyInstance> {
+  const config = options.config ?? loadConfig();
+  assertSafeExecutionConfig(config);
+  const capabilityReport = await assertCodexCapabilities(config, options.spawn);
+  const app = createServer({ ...options, config, capabilityReport });
+  const listen = options.listen ?? ((server, bindConfig) =>
+    server.listen({ host: bindConfig.host, port: bindConfig.port }));
+  await listen(app, config);
+  return app;
+}
+
 async function main(): Promise<void> {
-  const config = loadConfig();
-  const app = createServer({ config, logger: true });
-  await app.listen({ host: config.host, port: config.port });
+  await startServer({ logger: true });
 }
 
 export function isMainModule(importMetaUrl: string, argvPath: string | undefined): boolean {
