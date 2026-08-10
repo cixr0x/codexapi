@@ -4,7 +4,7 @@ import { defaultCodexCommand, type AppConfig } from "./config.js";
 import { createCodexChildEnvironment, type SpawnFn } from "./codexRunner.js";
 import { CODEX_EXECUTION_POLICY } from "./executionPolicy.js";
 
-const MINIMUM_CODEX_VERSION = [0, 144, 1] as const;
+const PINNED_CODEX_VERSION = [0, 147, 0] as const;
 const MAX_PROBE_OUTPUT_BYTES = 64 * 1024;
 const MAX_PROBE_TIMEOUT_MS = 10_000;
 const PROBE_TERMINATION_GRACE_MS = 1_000;
@@ -51,8 +51,8 @@ export async function assertCodexCapabilities(
   );
   const version = parseCodexVersion(versionOutput.stdout);
 
-  if (!isMinimumVersion(version)) {
-    throw new Error("CodexAPI requires Codex CLI 0.144.1 or newer.");
+  if (!isPinnedVersion(version)) {
+    throw new Error("CodexAPI requires exact Codex CLI 0.147.0.");
   }
 
   const featureOutput = await runProbe(
@@ -280,56 +280,75 @@ function parseCodexVersion(output: string): { text: string; parts: [number, numb
   };
 }
 
-function isMinimumVersion(version: { parts: [number, number, number] }): boolean {
-  for (let index = 0; index < MINIMUM_CODEX_VERSION.length; index += 1) {
-    const minimum = MINIMUM_CODEX_VERSION[index]!;
-    const actual = version.parts[index]!;
-    if (actual !== minimum) {
-      return actual > minimum;
-    }
-  }
-
-  return true;
+function isPinnedVersion(version: { parts: [number, number, number] }): boolean {
+  return PINNED_CODEX_VERSION.every(
+    (expected, index) => version.parts[index] === expected,
+  );
 }
 
 function parseDisabledFeatureOutput(output: string): "stable" | "experimental" {
-  const lines = output.split(/\r?\n/).map((candidate) => candidate.trim());
+  const lines = output
+    .split(/\r?\n/)
+    .map((candidate) => candidate.trim())
+    .filter(Boolean);
   const recognizedMaturities = new Set([
     "stable",
     "experimental",
     "under development",
+    "removed",
+    "deprecated",
   ]);
+  const allowedEnabledFeatures = new Map<string, string>(
+    CODEX_EXECUTION_POLICY.allowedEnabledFeatures.map((feature) => [
+      feature.name,
+      feature.maturity,
+    ]),
+  );
+  const features = new Map<
+    string,
+    { maturity: string; enabled: boolean }
+  >();
   let shellToolFeature: "stable" | "experimental" | undefined;
 
-  for (const expectedName of CODEX_EXECUTION_POLICY.disabledFeatures) {
-    const candidates = lines.filter(
-      (line) => line.split(/\s+/, 1)[0] === expectedName,
-    );
-    if (candidates.length === 0) {
-      throw new Error(`Codex ${expectedName} feature was not reported.`);
-    }
-    if (candidates.length !== 1) {
-      throw new Error(`Codex ${expectedName} feature is incompatible with this policy.`);
+  for (const line of lines) {
+    const candidateName = /^([a-z][a-z0-9_]*)\s+/.exec(line)?.[1];
+    const match = /^([a-z][a-z0-9_]*)\s+(.+?)\s+(true|false)$/.exec(line);
+    if (!match || !recognizedMaturities.has(match[2]!)) {
+      if (candidateName) {
+        throw new Error(
+          `Codex ${candidateName} feature is incompatible with this policy.`,
+        );
+      }
+      throw new Error("Codex feature output contained a malformed row.");
     }
 
-    const match = /^(\S+)\s+(.+?)\s+(true|false)$/.exec(candidates[0]!);
-    if (!match || match[1] !== expectedName) {
-      throw new Error(`Codex ${expectedName} feature is incompatible with this policy.`);
+    const [, name, maturity, enabledText] = match;
+    if (features.has(name!)) {
+      throw new Error(`Codex ${name} feature is incompatible with this policy.`);
     }
-    if (!recognizedMaturities.has(match[2]!)) {
-      throw new Error(`Codex ${expectedName} feature is incompatible with this policy.`);
+    const enabled = enabledText === "true";
+    if (enabled && allowedEnabledFeatures.get(name!) !== maturity) {
+      throw new Error(`Codex ${name} feature is enabled but is not allowed by this policy.`);
     }
-    if (match[3] === "true") {
+    features.set(name!, { maturity: maturity!, enabled });
+  }
+
+  for (const expectedName of CODEX_EXECUTION_POLICY.disabledFeatures) {
+    const feature = features.get(expectedName);
+    if (!feature) {
+      throw new Error(`Codex ${expectedName} feature was not reported.`);
+    }
+    if (feature.enabled) {
       throw new Error(
         `Codex ${expectedName} feature is enabled despite the disable policy.`,
       );
     }
 
     if (expectedName === "shell_tool") {
-      if (match[2] !== "stable" && match[2] !== "experimental") {
+      if (feature.maturity !== "stable" && feature.maturity !== "experimental") {
         throw new Error("Codex shell_tool feature is incompatible with this policy.");
       }
-      shellToolFeature = match[2];
+      shellToolFeature = feature.maturity;
     }
   }
 

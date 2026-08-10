@@ -6,7 +6,7 @@
 
 **Architecture:** CodexAPI will expose one fixed `codex exec` execution policy: read-only, approval-free, ephemeral, isolated workspace, host-capable features disabled, and web search enabled only by the supported Responses tool declaration. A dedicated image-fetch boundary validates and pins public HTTP(S) destinations, verifies image bytes, creates a temporary attachment, and always removes it. Ludora opts the BGG matcher into web search and image input, then hardens cache identity, transactionality, semantic validation, and trace evidence.
 
-**Tech Stack:** Node.js 20+, TypeScript, Fastify 5, Vitest 3, Codex CLI 0.144.1 or a capability-compatible newer version, OpenAI Node SDK, PostgreSQL client transactions, Python unittest.
+**Tech Stack:** Node.js 20+, TypeScript, Fastify 5, Vitest 3, exact security pin Codex CLI 0.147.0, OpenAI Node SDK, PostgreSQL client transactions, Python unittest.
 
 ## Global Constraints
 
@@ -26,7 +26,7 @@
 ### CodexAPI
 
 - Create `src/executionPolicy.ts`: immutable safe policy, request capability types, health projection, and unsafe-config validation.
-- Create `src/codexCapabilityCheck.ts`: minimum-version and feature-output parsing plus startup fail-closed probe.
+- Create `src/codexCapabilityCheck.ts`: exact-version and complete feature-output parsing plus startup fail-closed probe.
 - Create `src/safeRemoteImage.ts`: URL validation, DNS classification, pinned HTTP(S) fetch, byte/MIME validation, redirect handling, and temporary-file cleanup contract.
 - Modify `src/codexRunner.ts`: consume the fixed policy and per-request `webSearch`/`imagePaths`; assemble constrained `codex exec` arguments only.
 - Modify `src/openaiCompat.ts`: return a normalized Responses request containing prompt, web-search opt-in, and at most one image URL; keep chat text-only.
@@ -299,7 +299,7 @@ git commit -m "security: validate CodexAPI image attachments"
 
 - [ ] **Step 1: Write failing version/feature probe tests**
 
-Test `codex-cli 0.144.1` as accepted; `0.144.0`, unparsable output, nonzero version command, missing `shell_tool`, and incompatible feature output as rejected. Assert `startServer()` performs the probe before calling `listen`, while `createServer({ runner })` remains deterministic for unit tests.
+Test exact `codex-cli 0.147.0` as accepted; older/newer versions, unparsable output, nonzero version command, missing or enabled fixed-disabled rows (including `view_image`), malformed/duplicate rows, unknown maturities, and unallowlisted enabled rows as rejected. Assert `startServer()` performs the probes before calling `listen`, while `createServer({ runner })` remains deterministic for unit tests.
 
 - [ ] **Step 2: Run tests and verify red**
 
@@ -309,11 +309,11 @@ Expected: FAIL because startup has no compatibility gate.
 
 - [ ] **Step 3: Implement the fail-closed probe**
 
-Run the configured executable/command prefix with `--version`, parse semantic version, require `>= 0.144.1`, then run `features list` and require a recognized `shell_tool` entry. Bound stdout/stderr and time out the probes. On any mismatch throw before the listener binds. Include the accepted version and policy name in `/health`, not command paths or workspace paths.
+Run the package-local executable with `--version`, require exact `0.147.0`, then parse the complete `features list` output into unique well-formed rows. Require every fixed-disabled feature false and allow only the pinned `removed` no-op rows to remain true at their exact maturity. Bound stdout/stderr and time out the probes. On any mismatch throw before the listener binds. Include the accepted version and policy name in `/health`, not command paths or workspace paths.
 
 - [ ] **Step 4: Rewrite local configuration documentation**
 
-Remove all app-server, profile, and capability-toggle environment variables. Set `CODEX_WORKSPACE` to an example empty inference directory. Document the exact accepted Responses tool declaration, optional `input_image`, bounded name-only fallback, fixed port, minimum CLI, and that arbitrary prompts cannot use host tools. Change `AGENTS.md` from “all services run as robertorojas87” to the approved dedicated CodexAPI identity rule while leaving actual production migration to the deployment runbook.
+Remove all app-server, profile, and capability-toggle environment variables. Set `CODEX_WORKSPACE` to an example empty inference directory. Document the exact accepted Responses tool declaration, optional `input_image`, bounded name-only fallback, fixed port, exact CLI security pin, and that arbitrary prompts cannot use host tools. Change `AGENTS.md` from “all services run as robertorojas87” to the approved dedicated CodexAPI identity rule while leaving actual production migration to the deployment runbook.
 
 - [ ] **Step 5: Run all CodexAPI verification and commit**
 

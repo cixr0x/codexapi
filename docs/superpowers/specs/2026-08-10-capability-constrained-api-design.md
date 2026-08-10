@@ -92,7 +92,7 @@ The dedicated identity owns its own Codex authentication. The runbook will inclu
 
 ## Codex version boundary
 
-The currently installed CLI proves that disabling `shell_tool` removes shell actions while native web search still works. CodexAPI will perform a startup capability/version check rather than assuming a CLI upgrade preserves flags. The supported minimum version and exact probe are documented and covered by command-assembly tests. Unknown or incompatible capability output fails startup before the HTTP listener accepts inference traffic.
+The exact package-local `@openai/codex@0.147.0` security pin proves that disabling `shell_tool` and `view_image` removes those host actions while native web search and explicit `--image` attachments remain separate request capabilities. CodexAPI performs a startup exact-version and complete-feature-table check rather than assuming a CLI upgrade preserves flags. Every nonblank feature row must be unique and well formed; fixed-disabled rows must be false; only the explicitly recorded `removed` no-op rows may remain true at their pinned maturity. Unknown or incompatible capability output fails startup before the HTTP listener accepts inference traffic.
 
 ## Ludora integration and correctness fixes
 

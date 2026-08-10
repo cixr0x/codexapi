@@ -73,10 +73,48 @@ const SAFE_DEFAULT_EXEC_ARGS = [
   "enable_fanout",
   "--disable",
   "workspace_dependencies",
+  "--disable",
+  "view_image",
+  "--disable",
+  "auth_elicitation",
+  "--disable",
+  "collaboration_modes",
+  "--disable",
+  "enable_request_compression",
+  "--disable",
+  "fast_mode",
+  "--disable",
+  "goals",
+  "--disable",
+  "guardian_approval",
+  "--disable",
+  "in_app_updates",
+  "--disable",
+  "mentions_v2",
+  "--disable",
+  "personality",
+  "--disable",
+  "remote_compaction_v2",
+  "--disable",
+  "secret_auth_storage",
+  "--disable",
+  "skill_search",
+  "--disable",
+  "sqlite",
+  "--disable",
+  "steer",
   "-c",
   'web_search="disabled"',
 ];
 const TEST_CODEX_HOME = "C:/codex-home";
+const VALID_USAGE = {
+  input_tokens: 21,
+  cached_input_tokens: 8,
+  output_tokens: 5,
+  reasoning_output_tokens: 2,
+};
+const CODE_MODE_DISABLED_WARNING =
+  "Code Mode is unavailable because code-mode host is disabled. Code mode will fail closed; enable `features.code_mode_host` and install `codex-code-mode-host`.";
 
 class FakeReadable extends EventEmitter {
   push(chunk: string | null): void {
@@ -135,14 +173,29 @@ function jsonlCompletion(text: string): string {
     }),
     JSON.stringify({
       type: "turn.completed",
-      usage: {
-        input_tokens: 21,
-        cached_input_tokens: 8,
-        output_tokens: 5,
-        reasoning_output_tokens: 2,
-      },
+      usage: VALID_USAGE,
     }),
   ].join("\n");
+}
+
+function runJsonl(
+  rawStdout: string,
+  options: { webSearch?: boolean } = {},
+): ReturnType<NonNullable<ReturnType<typeof createCodexRunner>["runWithDetails"]>> {
+  const child = new FakeChildProcess();
+  const runner = createCodexRunner({
+    command: "codex",
+    workspace: "C:/workspace",
+    codexHome: TEST_CODEX_HOME,
+    timeoutMs: 1000,
+    spawn: createFakeSpawn(child),
+  });
+  const result = runner.runWithDetails!("Hello", {
+    webSearch: options.webSearch ?? false,
+  });
+  child.stdout.push(`${rawStdout}\n`);
+  child.close(0);
+  return result;
 }
 
 describe("Codex runner", () => {
@@ -556,7 +609,7 @@ describe("Codex runner", () => {
           type: "item.completed",
           item: { id: "item-message", type: "agent_message", text: "concealed" },
         }),
-        JSON.stringify({ type: "turn.completed", usage: {} }),
+        JSON.stringify({ type: "turn.completed", usage: VALID_USAGE }),
       ].join("\n");
 
       const resultPromise = runner.runWithDetails!("Hello", { webSearch: false });
@@ -599,7 +652,7 @@ describe("Codex runner", () => {
         type: "item.completed",
         item: { id: "item-message", type: "agent_message", text: "concealed" },
       }),
-      JSON.stringify({ type: "turn.completed", usage: {} }),
+      JSON.stringify({ type: "turn.completed", usage: VALID_USAGE }),
     ].join("\n");
 
     const resultPromise = runner.runWithDetails!("Hello", { webSearch: false });
@@ -641,7 +694,7 @@ describe("Codex runner", () => {
         type: "item.completed",
         item: { id: "item-message", type: "agent_message", text: "Coffee Rush" },
       }),
-      JSON.stringify({ type: "turn.completed", usage: {} }),
+      JSON.stringify({ type: "turn.completed", usage: VALID_USAGE }),
     ].join("\n");
 
     const resultPromise = runner.runWithDetails!("Hello", { webSearch: true });
@@ -649,6 +702,195 @@ describe("Codex runner", () => {
     child.close(0);
 
     await expect(resultPromise).resolves.toMatchObject({ stdout: "Coffee Rush" });
+  });
+
+  it("accepts the exact pinned pre-turn code-mode-disabled diagnostic without returning it", async () => {
+    const rawStdout = [
+      JSON.stringify({ type: "thread.started", thread_id: "thread-1" }),
+      JSON.stringify({
+        type: "item.completed",
+        item: { id: "item-warning", type: "error", message: CODE_MODE_DISABLED_WARNING },
+      }),
+      JSON.stringify({ type: "turn.started" }),
+      JSON.stringify({
+        type: "item.completed",
+        item: { id: "item-message", type: "agent_message", text: "safe answer" },
+      }),
+      JSON.stringify({ type: "turn.completed", usage: VALID_USAGE }),
+    ].join("\n");
+
+    await expect(runJsonl(rawStdout)).resolves.toMatchObject({ stdout: "safe answer" });
+  });
+
+  it.each([
+    [
+      "a different pre-turn error",
+      [
+        {
+          type: "item.completed",
+          item: { id: "item-warning", type: "error", message: "other" },
+        },
+      ],
+    ],
+    [
+      "a duplicate pinned pre-turn diagnostic",
+      [
+        {
+          type: "item.completed",
+          item: { id: "item-warning-1", type: "error", message: CODE_MODE_DISABLED_WARNING },
+        },
+        {
+          type: "item.completed",
+          item: { id: "item-warning-2", type: "error", message: CODE_MODE_DISABLED_WARNING },
+        },
+      ],
+    ],
+  ])("rejects %s", async (_name, warningEvents) => {
+    const rawStdout = [
+      JSON.stringify({ type: "thread.started", thread_id: "thread-1" }),
+      ...warningEvents.map((event) => JSON.stringify(event)),
+      JSON.stringify({ type: "turn.started" }),
+      JSON.stringify({
+        type: "item.completed",
+        item: { id: "item-message", type: "agent_message", text: "concealed" },
+      }),
+      JSON.stringify({ type: "turn.completed", usage: VALID_USAGE }),
+    ].join("\n");
+
+    await expect(runJsonl(rawStdout)).rejects.toMatchObject({
+      name: "CodexRunnerError",
+      code: "INVALID_OUTPUT",
+    });
+  });
+
+  it.each([
+    ["missing item id", { id: "", type: "agent_message", text: "answer" }],
+    ["arbitrary error item", { id: "item-1", type: "error", message: "other" }],
+  ])("rejects %s", async (_name, item) => {
+    const rawStdout = [
+      JSON.stringify({ type: "thread.started", thread_id: "thread-1" }),
+      JSON.stringify({ type: "turn.started" }),
+      JSON.stringify({ type: "item.completed", item }),
+      JSON.stringify({ type: "turn.completed", usage: VALID_USAGE }),
+    ].join("\n");
+
+    await expect(runJsonl(rawStdout)).rejects.toMatchObject({
+      name: "CodexRunnerError",
+      code: "INVALID_OUTPUT",
+    });
+  });
+
+  it.each([
+    [
+      "web-search update before start",
+      [
+        { type: "item.updated", item: { id: "item-search", type: "web_search" } },
+      ],
+    ],
+    [
+      "web-search completion before start",
+      [
+        { type: "item.completed", item: { id: "item-search", type: "web_search" } },
+      ],
+    ],
+    [
+      "duplicate web-search start",
+      [
+        { type: "item.started", item: { id: "item-search", type: "web_search" } },
+        { type: "item.started", item: { id: "item-search", type: "web_search" } },
+      ],
+    ],
+    [
+      "duplicate web-search completion",
+      [
+        { type: "item.started", item: { id: "item-search", type: "web_search" } },
+        { type: "item.completed", item: { id: "item-search", type: "web_search" } },
+        { type: "item.completed", item: { id: "item-search", type: "web_search" } },
+      ],
+    ],
+    [
+      "item type change",
+      [
+        { type: "item.started", item: { id: "item-search", type: "web_search" } },
+        { type: "item.updated", item: { id: "item-search", type: "reasoning", text: "x" } },
+      ],
+    ],
+    [
+      "unfinished web search at turn completion",
+      [
+        { type: "item.started", item: { id: "item-search", type: "web_search" } },
+      ],
+    ],
+    [
+      "started reasoning item incompatible with 0.147 completion-only shape",
+      [
+        { type: "item.started", item: { id: "item-reasoning", type: "reasoning", text: "x" } },
+      ],
+    ],
+    [
+      "duplicate completion-only item id",
+      [
+        { type: "item.completed", item: { id: "item-reasoning", type: "reasoning", text: "x" } },
+        { type: "item.completed", item: { id: "item-reasoning", type: "reasoning", text: "x" } },
+      ],
+    ],
+  ])("rejects %s", async (_name, itemEvents) => {
+    const rawStdout = [
+      JSON.stringify({ type: "thread.started", thread_id: "thread-1" }),
+      JSON.stringify({ type: "turn.started" }),
+      ...itemEvents.map((event) => JSON.stringify(event)),
+      JSON.stringify({
+        type: "item.completed",
+        item: { id: "item-message", type: "agent_message", text: "concealed" },
+      }),
+      JSON.stringify({ type: "turn.completed", usage: VALID_USAGE }),
+    ].join("\n");
+
+    await expect(runJsonl(rawStdout, { webSearch: true })).rejects.toMatchObject({
+      name: "CodexRunnerError",
+      code: "INVALID_OUTPUT",
+    });
+  });
+
+  it("accepts completion-only reasoning with a unique nonempty ID", async () => {
+    const rawStdout = [
+      JSON.stringify({ type: "thread.started", thread_id: "thread-1" }),
+      JSON.stringify({ type: "turn.started" }),
+      JSON.stringify({
+        type: "item.completed",
+        item: { id: "item-reasoning", type: "reasoning", text: "summary" },
+      }),
+      JSON.stringify({
+        type: "item.completed",
+        item: { id: "item-message", type: "agent_message", text: "answer" },
+      }),
+      JSON.stringify({ type: "turn.completed", usage: VALID_USAGE }),
+    ].join("\n");
+
+    await expect(runJsonl(rawStdout)).resolves.toMatchObject({ stdout: "answer" });
+  });
+
+  it.each([
+    ["missing", { ...VALID_USAGE, input_tokens: undefined }],
+    ["non-number", { ...VALID_USAGE, input_tokens: "21" }],
+    ["non-integer", { ...VALID_USAGE, input_tokens: 1.5 }],
+    ["negative", { ...VALID_USAGE, input_tokens: -1 }],
+    ["unsafe integer", { ...VALID_USAGE, input_tokens: Number.MAX_SAFE_INTEGER + 1 }],
+  ])("rejects %s token usage", async (_name, usage) => {
+    const rawStdout = [
+      JSON.stringify({ type: "thread.started", thread_id: "thread-1" }),
+      JSON.stringify({ type: "turn.started" }),
+      JSON.stringify({
+        type: "item.completed",
+        item: { id: "item-message", type: "agent_message", text: "answer" },
+      }),
+      JSON.stringify({ type: "turn.completed", usage }),
+    ].join("\n");
+
+    await expect(runJsonl(rawStdout)).rejects.toMatchObject({
+      name: "CodexRunnerError",
+      code: "INVALID_OUTPUT",
+    });
   });
 
   it.each(["error", "turn.failed"])(
@@ -671,7 +913,7 @@ describe("Codex runner", () => {
           type: "item.completed",
           item: { id: "item-message", type: "agent_message", text: "concealed" },
         }),
-        JSON.stringify({ type: "turn.completed", usage: {} }),
+        JSON.stringify({ type: "turn.completed", usage: VALID_USAGE }),
       ].join("\n");
 
       const resultPromise = runner.runWithDetails!("Hello");

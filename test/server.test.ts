@@ -157,8 +157,9 @@ describe("Fastify server", () => {
     child.stderr = new EventEmitter();
     child.kill = vi.fn();
     const outputs = [
-      "codex-cli 0.144.1\n",
+      "codex-cli 0.147.0\n",
       [
+        "apply_patch_freeform removed false",
         "shell_tool stable false",
         "apps stable false",
         "plugins stable false",
@@ -182,6 +183,27 @@ describe("Fastify server", () => {
         "plugin_sharing stable false",
         "enable_fanout under development false",
         "workspace_dependencies stable false",
+        "view_image stable false",
+        "auth_elicitation stable false",
+        "collaboration_modes removed false",
+        "enable_request_compression stable false",
+        "fast_mode stable false",
+        "goals stable false",
+        "guardian_approval stable false",
+        "in_app_updates stable false",
+        "item_ids removed true",
+        "mentions_v2 stable false",
+        "personality stable false",
+        "remote_compaction_v2 stable false",
+        "resize_all_images removed true",
+        "secret_auth_storage stable false",
+        "skill_search stable false",
+        "sqlite removed false",
+        "steer removed false",
+        "terminal_resize_reflow removed true",
+        "tool_search_always_defer_mcp_tools removed true",
+        "tui_app_server removed true",
+        "use_legacy_landlock deprecated false",
       ].join("\n") + "\n",
       "[]\n",
     ];
@@ -200,7 +222,7 @@ describe("Fastify server", () => {
       const health = await app.inject({ method: "GET", url: "/health" });
       expect(health.json()).toMatchObject({
         codexCli: {
-          version: "0.144.1",
+          version: "0.147.0",
           shellToolFeature: "stable",
           checked: true,
         },

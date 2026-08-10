@@ -4,17 +4,17 @@
 
 ## Constrained runtime
 
-The service runs the package-local platform-native executable from `@openai/codex@0.144.1`. It does not use `PATH`, `CODEX_COMMAND`, command prefixes, profiles, app-server mode, or capability environment toggles.
+The service runs the package-local platform-native executable from the exact security pin `@openai/codex@0.147.0`. It does not use `PATH`, `CODEX_COMMAND`, command prefixes, profiles, app-server mode, or capability environment toggles.
 
 Before it listens, startup runs the same executable with the dedicated workspace, dedicated `CODEX_HOME`, and sanitized child environment used for inference. Startup fails closed unless all of the following hold:
 
-- the CLI reports `codex-cli` version `0.144.1` or newer;
-- `features list` recognizes `shell_tool` as stable or experimental;
+- the CLI reports exactly `codex-cli 0.147.0`;
+- every nonblank `features list` row is unique and well formed, every fixed-disabled feature (including `view_image`) is false, and the only true rows are the five exact `removed` no-op rows recorded in `allowedEnabledFeatures`;
 - `mcp list --json` returns an empty inventory.
 
 The `/health` response reports the accepted CLI version, capability policy name (`codexapi-constrained-v1`), and the effective application policy. It never returns command, workspace, or home paths.
 
-Every request uses `codex exec` with a read-only sandbox, `approval_policy="never"`, `mcp_servers={}`, strict config, ignored user/project config, and an ephemeral session. Shell execution, apps, plugins, browser/computer control, code mode, image generation, multi-agent execution, memories, hooks, tool discovery, plugin sharing, workspace dependencies, and the other fixed disabled features are unavailable. Arbitrary prompts therefore cannot invoke host tools or inherited MCP servers. Web search is off unless the single allowed Responses declaration below opts in.
+Every request uses `codex exec` with a read-only sandbox, `approval_policy="never"`, `mcp_servers={}`, strict config, ignored user/project config, and an ephemeral session. Shell execution, apps, plugins, browser/computer control, code mode, local-image viewing, image generation, multi-agent execution, memories, hooks, tool discovery, plugin sharing, workspace dependencies, and the other fixed disabled features are unavailable. `--disable view_image` disables the host-side local-image tool; trusted, prevalidated request attachments remain a separate explicit `--image` input path. Arbitrary prompts therefore cannot invoke host tools or inherited MCP servers. Web search is off unless the single allowed Responses declaration below opts in.
 
 ## Requirements and configuration
 

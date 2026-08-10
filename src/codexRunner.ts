@@ -5,6 +5,9 @@ import { join } from "node:path";
 
 import { CODEX_EXECUTION_POLICY } from "./executionPolicy.js";
 
+const CODE_MODE_DISABLED_WARNING =
+  "Code Mode is unavailable because code-mode host is disabled. Code mode will fail closed; enable `features.code_mode_host` and install `codex-code-mode-host`.";
+
 export type CodexRunnerErrorCode =
   | "NON_ZERO_EXIT"
   | "SPAWN_ERROR"
@@ -110,6 +113,11 @@ export interface CodexRunner {
 interface ParsedCodexOutput {
   output: string;
   usage?: CodexUsage;
+}
+
+interface ParsedItemLifecycle {
+  type: "agent_message" | "reasoning" | "web_search" | "error";
+  status: "started" | "completed";
 }
 
 interface BoundedOutput {
@@ -541,8 +549,10 @@ function parseCodexOutput(
   webSearchAllowed: boolean,
 ): ParsedCodexOutput {
   const messages: string[] = [];
+  const items = new Map<string, ParsedItemLifecycle>();
   let usage: CodexUsage | undefined;
   let phase: "thread" | "turn" | "active" | "completed" = "thread";
+  let codeModeDisabledWarningSeen = false;
 
   for (const line of rawStdout.split(/\r?\n/)) {
     if (!line.trim()) {
@@ -581,21 +591,76 @@ function parseCodexOutput(
       event.type === "item.updated" ||
       event.type === "item.completed"
     ) {
-      if (phase !== "active" || !isRecord(event.item)) {
+      if (!isRecord(event.item)) {
         throw new Error("Codex JSONL output contained an invalid item event.");
       }
+      const itemId = event.item.id;
       const itemType = event.item.type;
+      if (typeof itemId !== "string" || !itemId.trim() || typeof itemType !== "string") {
+        throw new Error("Codex JSONL output contained an invalid item event.");
+      }
+
+      const existing = items.get(itemId);
+      if (existing && existing.type !== itemType) {
+        throw new Error("Codex JSONL output changed an item type.");
+      }
+
+      if (phase === "turn") {
+        if (
+          codeModeDisabledWarningSeen ||
+          existing ||
+          event.type !== "item.completed" ||
+          itemType !== "error" ||
+          event.item.message !== CODE_MODE_DISABLED_WARNING
+        ) {
+          throw new Error("Codex JSONL output contained an invalid pre-turn item.");
+        }
+        codeModeDisabledWarningSeen = true;
+        items.set(itemId, { type: "error", status: "completed" });
+        continue;
+      }
+
+      if (phase !== "active") {
+        throw new Error("Codex JSONL output contained an invalid item event.");
+      }
+
       if (itemType === "agent_message") {
-        if (event.type !== "item.completed" || typeof event.item.text !== "string") {
+        if (
+          existing ||
+          event.type !== "item.completed" ||
+          typeof event.item.text !== "string"
+        ) {
           throw new Error("Codex JSONL output contained an invalid agent message.");
         }
+        items.set(itemId, { type: "agent_message", status: "completed" });
         messages.push(event.item.text);
         continue;
       }
       if (itemType === "reasoning") {
+        if (
+          existing ||
+          event.type !== "item.completed" ||
+          typeof event.item.text !== "string"
+        ) {
+          throw new Error("Codex JSONL output contained an invalid reasoning item.");
+        }
+        items.set(itemId, { type: "reasoning", status: "completed" });
         continue;
       }
       if (itemType === "web_search" && webSearchAllowed) {
+        if (event.type === "item.started") {
+          if (existing) {
+            throw new Error("Codex JSONL output contained a duplicate item start.");
+          }
+          items.set(itemId, { type: "web_search", status: "started" });
+          continue;
+        }
+        if (!existing || existing.status !== "started") {
+          throw new Error("Codex JSONL output contained an invalid item lifecycle.");
+        }
+        if (event.type === "item.completed") {
+          items.set(itemId, { type: "web_search", status: "completed" });
+        }
         continue;
       }
       throw new Error("Codex JSONL output contained a forbidden item type.");
@@ -604,6 +669,9 @@ function parseCodexOutput(
     if (event.type === "turn.completed") {
       if (phase !== "active" || !isRecord(event.usage)) {
         throw new Error("Codex JSONL output contained an invalid turn completion.");
+      }
+      if ([...items.values()].some((item) => item.status !== "completed")) {
+        throw new Error("Codex JSONL output completed with unfinished items.");
       }
       usage = {
         inputTokens: readTokenCount(event.usage.input_tokens),
@@ -644,7 +712,10 @@ function parseRecord(line: string): Record<string, unknown> | undefined {
 }
 
 function readTokenCount(value: unknown): number {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0;
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+    throw new Error("Codex JSONL output contained invalid token usage.");
+  }
+  return value;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

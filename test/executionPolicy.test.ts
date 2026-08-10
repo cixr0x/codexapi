@@ -46,6 +46,28 @@ const EXPECTED_POLICY = {
     "plugin_sharing",
     "enable_fanout",
     "workspace_dependencies",
+    "view_image",
+    "auth_elicitation",
+    "collaboration_modes",
+    "enable_request_compression",
+    "fast_mode",
+    "goals",
+    "guardian_approval",
+    "in_app_updates",
+    "mentions_v2",
+    "personality",
+    "remote_compaction_v2",
+    "secret_auth_storage",
+    "skill_search",
+    "sqlite",
+    "steer",
+  ],
+  allowedEnabledFeatures: [
+    { name: "item_ids", maturity: "removed" },
+    { name: "resize_all_images", maturity: "removed" },
+    { name: "terminal_resize_reflow", maturity: "removed" },
+    { name: "tool_search_always_defer_mcp_tools", maturity: "removed" },
+    { name: "tui_app_server", maturity: "removed" },
   ],
   ignoreUserConfig: true,
   ignoreRules: true,
@@ -75,6 +97,12 @@ describe("Codex execution policy", () => {
     expect(CODEX_EXECUTION_POLICY).toMatchObject(EXPECTED_POLICY);
     expect(Object.isFrozen(CODEX_EXECUTION_POLICY)).toBe(true);
     expect(Object.isFrozen(CODEX_EXECUTION_POLICY.disabledFeatures)).toBe(true);
+    expect(Object.isFrozen(CODEX_EXECUTION_POLICY.allowedEnabledFeatures)).toBe(true);
+    expect(
+      CODEX_EXECUTION_POLICY.allowedEnabledFeatures.every((feature) =>
+        Object.isFrozen(feature),
+      ),
+    ).toBe(true);
     expect(CODEX_EXECUTION_POLICY.disabledFeatures).not.toContain("browser");
     expect(CODEX_EXECUTION_POLICY.disabledFeatures).not.toContain("tool_discovery");
 
@@ -82,6 +110,9 @@ describe("Codex execution policy", () => {
     expect(JSON.parse(JSON.stringify(health))).toEqual(EXPECTED_POLICY);
     expect(health).not.toBe(CODEX_EXECUTION_POLICY);
     expect(health.disabledFeatures).not.toBe(CODEX_EXECUTION_POLICY.disabledFeatures);
+    expect(health.allowedEnabledFeatures).not.toBe(
+      CODEX_EXECUTION_POLICY.allowedEnabledFeatures,
+    );
   });
 
   it("defines normalized per-request capabilities", () => {
