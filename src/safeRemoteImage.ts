@@ -37,6 +37,15 @@ export interface PreparedRemoteImage {
   cleanup(): Promise<void>;
 }
 
+export class SafeImageCleanupError extends Error {
+  readonly code = "image_cleanup_failed" as const;
+
+  constructor() {
+    super("Temporary image cleanup failed.");
+    this.name = "SafeImageCleanupError";
+  }
+}
+
 export type SafeImageLookup = (
   hostname: string,
   options: { all: true; verbatim: true },
@@ -231,7 +240,11 @@ export async function prepareRemoteImage(
     let cleanup: () => Promise<void> = async () => undefined;
     if (temporaryDirectory) {
       cleanup = createCleanup(temporaryDirectory, runtime.rm);
-      await cleanup();
+      try {
+        await cleanup();
+      } catch {
+        // The bounded reason remains the fetch result; the returned cleanup stays retryable.
+      }
     }
     return failedPreparedImage(reasonFor(error, abortState), cleanup);
   } finally {
@@ -528,7 +541,7 @@ function createCleanup(
   rm: ResolvedDependencies["rm"],
 ): () => Promise<void> {
   let cleaned = false;
-  let activeCleanup: Promise<boolean> | undefined;
+  let activeCleanup: Promise<void> | undefined;
 
   return async () => {
     if (cleaned) {
@@ -537,9 +550,8 @@ function createCleanup(
     activeCleanup ??= removeTemporaryDirectory(directory, rm);
     const currentCleanup = activeCleanup;
     try {
-      if (await currentCleanup) {
-        cleaned = true;
-      }
+      await currentCleanup;
+      cleaned = true;
     } finally {
       if (activeCleanup === currentCleanup) {
         activeCleanup = undefined;
@@ -551,16 +563,16 @@ function createCleanup(
 async function removeTemporaryDirectory(
   directory: string,
   rm: ResolvedDependencies["rm"],
-): Promise<boolean> {
+): Promise<void> {
   for (let attempt = 0; attempt < MAX_CLEANUP_ATTEMPTS; attempt += 1) {
     try {
       await rm(directory, { recursive: true, force: true });
-      return true;
+      return;
     } catch {
       // Retry a bounded number of times; callers can retry the idempotent cleanup later.
     }
   }
-  return false;
+  throw new SafeImageCleanupError();
 }
 
 function failedPreparedImage(

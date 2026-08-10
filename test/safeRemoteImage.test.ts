@@ -652,6 +652,28 @@ describe("prepareRemoteImage byte validation and cleanup", () => {
     expect(await readdir(setup.tempRoot)).toEqual([]);
   });
 
+  it("signals a bounded cleanup failure when a verified image cannot be removed", async () => {
+    const setup = await dependencies();
+    const remove = vi.fn(async () => {
+      throw Object.assign(new Error("sensitive platform cleanup detail"), {
+        code: "EPERM",
+      });
+    });
+    const prepared = await prepareRemoteImage(
+      "https://images.example.test/cover.jpg",
+      { ...setup.dependencies, rm: remove },
+    );
+
+    expect(prepared.reason).toBeNull();
+    await expect(prepared.cleanup()).rejects.toMatchObject({
+      name: "SafeImageCleanupError",
+      code: "image_cleanup_failed",
+      message: "Temporary image cleanup failed.",
+    });
+    expect(remove).toHaveBeenCalledTimes(3);
+    expect(await readdir(setup.tempRoot)).toHaveLength(1);
+  });
+
   it("exposes only the closed bounded reason vocabulary", () => {
     const reasons = [
       "invalid_url",

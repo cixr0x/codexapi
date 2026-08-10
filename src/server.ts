@@ -1,5 +1,6 @@
 import cors from "@fastify/cors";
 import Fastify, {
+  type FastifyBaseLogger,
   type FastifyInstance,
   type FastifyReply,
   type FastifyRequest,
@@ -52,6 +53,9 @@ import {
   normalizeStructuredOutput,
 } from "./structuredOutput.js";
 import { webUiHtml } from "./webUi.js";
+
+const DEFERRED_IMAGE_CLEANUP_ATTEMPTS = 3;
+const DEFERRED_IMAGE_CLEANUP_DELAY_MS = 25;
 
 export interface CreateServerOptions {
   config?: AppConfig;
@@ -277,13 +281,13 @@ export function createServer(options: CreateServerOptions = {}): FastifyInstance
       return undefined;
     } finally {
       if (preparedImageCleanupSafe) {
-        try {
-          await preparedImage.cleanup();
-        } catch {
-          // Attachment cleanup must never change the API response.
-        }
+        await cleanupPreparedImage(preparedImage, request.log);
       } else if (preparedImageCleanupWhenSafe) {
-        cleanupPreparedImageWhenSafe(preparedImageCleanupWhenSafe, preparedImage);
+        cleanupPreparedImageWhenSafe(
+          preparedImageCleanupWhenSafe,
+          preparedImage,
+          request.log,
+        );
       }
     }
   });
@@ -294,10 +298,48 @@ export function createServer(options: CreateServerOptions = {}): FastifyInstance
 function cleanupPreparedImageWhenSafe(
   cleanupWhenSafe: Promise<void>,
   preparedImage: PreparedRemoteImage,
+  logger: FastifyBaseLogger,
 ): void {
   void cleanupWhenSafe
-    .then(() => preparedImage.cleanup())
-    .catch(() => undefined);
+    .then(() => cleanupPreparedImage(preparedImage, logger))
+    .catch(() => {
+      logImageCleanupFailure(logger);
+    });
+}
+
+async function cleanupPreparedImage(
+  preparedImage: PreparedRemoteImage,
+  logger: FastifyBaseLogger,
+): Promise<void> {
+  try {
+    await preparedImage.cleanup();
+  } catch {
+    schedulePreparedImageCleanup(preparedImage, logger);
+  }
+}
+
+function schedulePreparedImageCleanup(
+  preparedImage: PreparedRemoteImage,
+  logger: FastifyBaseLogger,
+  attemptsRemaining = DEFERRED_IMAGE_CLEANUP_ATTEMPTS,
+): void {
+  const retryTimer = setTimeout(() => {
+    void preparedImage.cleanup().catch(() => {
+      if (attemptsRemaining > 1) {
+        schedulePreparedImageCleanup(preparedImage, logger, attemptsRemaining - 1);
+      } else {
+        logImageCleanupFailure(logger);
+      }
+    });
+  }, DEFERRED_IMAGE_CLEANUP_DELAY_MS);
+  retryTimer.unref();
+}
+
+function logImageCleanupFailure(logger: FastifyBaseLogger): void {
+  logger.error(
+    { code: "image_cleanup_failed" },
+    "Temporary image cleanup failed after bounded retries.",
+  );
 }
 
 function mapError(error: unknown): OpenAIHttpError {

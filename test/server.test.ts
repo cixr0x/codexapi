@@ -6,10 +6,11 @@ import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { CodexRunnerError, type CodexRunner } from "../src/codexRunner.js";
-import type {
-  PreparedRemoteImage,
-  SafeImageReason,
-  SafeRemoteImageDependencies,
+import {
+  SafeImageCleanupError,
+  type PreparedRemoteImage,
+  type SafeImageReason,
+  type SafeRemoteImageDependencies,
 } from "../src/safeRemoteImage.js";
 import { createServer, isMainModule, startServer } from "../src/server.js";
 
@@ -515,6 +516,92 @@ describe("Fastify server", () => {
 
     expect(response.statusCode).toBe(500);
     expect(image.cleanup).toHaveBeenCalledOnce();
+    await app.close();
+  });
+
+  it("retains and retries a prepared image after a signaled cleanup failure", async () => {
+    const cleanup = vi
+      .fn<PreparedRemoteImage["cleanup"]>()
+      .mockRejectedValueOnce(new SafeImageCleanupError())
+      .mockResolvedValue(undefined);
+    const prepareRemoteImage = vi.fn(async () => ({
+      path: "C:\\safe-temp\\image.jpg",
+      reason: null,
+      cleanup,
+    }));
+    const { runner } = fakeDetailedRunner("Coffee Rush");
+    const app = createServer({
+      config: testConfig(),
+      runner,
+      prepareRemoteImage,
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/responses",
+      payload: {
+        input: [
+          {
+            role: "user",
+            content: [
+              { type: "input_text", text: "Coffee Rush" },
+              { type: "input_image", image_url: "https://images.example.test/cover.jpg" },
+            ],
+          },
+        ],
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    await vi.waitFor(() => {
+      expect(cleanup).toHaveBeenCalledTimes(2);
+    });
+    await app.close();
+  });
+
+  it("logs only a bounded code after deferred image cleanup retries are exhausted", async () => {
+    const sensitiveImagePath = "C:\\safe-temp\\private-image.jpg";
+    const cleanup = vi.fn<PreparedRemoteImage["cleanup"]>(async () => {
+      throw new SafeImageCleanupError();
+    });
+    const prepareRemoteImage = vi.fn(async () => ({
+      path: sensitiveImagePath,
+      reason: null,
+      cleanup,
+    }));
+    const { runner } = fakeDetailedRunner("Coffee Rush");
+    const app = createServer({
+      config: testConfig(),
+      runner,
+      prepareRemoteImage,
+    });
+    const logError = vi.spyOn(app.log, "error");
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/responses",
+      payload: {
+        input: [
+          {
+            role: "user",
+            content: [
+              { type: "input_text", text: "Coffee Rush" },
+              { type: "input_image", image_url: "https://images.example.test/cover.jpg" },
+            ],
+          },
+        ],
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    await vi.waitFor(() => {
+      expect(cleanup).toHaveBeenCalledTimes(4);
+      expect(logError).toHaveBeenCalledWith(
+        { code: "image_cleanup_failed" },
+        "Temporary image cleanup failed after bounded retries.",
+      );
+    });
+    expect(JSON.stringify(logError.mock.calls)).not.toContain(sensitiveImagePath);
     await app.close();
   });
 
