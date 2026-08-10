@@ -18,8 +18,6 @@ export interface AppConfig {
   port: number;
   codexBackend: CodexBackend;
   codexWorkspace: string;
-  codexCommand: string;
-  codexCommandArgs: string[];
   codexTimeoutMs: number;
   codexDefaultModel: string;
   codexAllowedModels: string[];
@@ -38,15 +36,11 @@ export function loadConfig(
   cwd = process.cwd(),
   platform = process.platform,
 ): AppConfig {
-  const defaultCommand = defaultCodexCommand(platform, env, process.execPath);
-
   const config: AppConfig = {
     host: env.HOST ?? "127.0.0.1",
     port: parseInteger(env.PORT, 3001, "PORT"),
     codexBackend: parseCodexBackend(env.CODEX_BACKEND),
     codexWorkspace: env.CODEX_WORKSPACE ?? "",
-    codexCommand: env.CODEX_COMMAND ?? defaultCommand.command,
-    codexCommandArgs: env.CODEX_COMMAND ? [] : defaultCommand.args,
     codexTimeoutMs: parseInteger(env.CODEX_TIMEOUT_MS, 120000, "CODEX_TIMEOUT_MS"),
     codexDefaultModel: parseString(env.CODEX_DEFAULT_MODEL, "gpt-5.4-mini"),
     codexAllowedModels: parseList(env.CODEX_ALLOWED_MODELS, [

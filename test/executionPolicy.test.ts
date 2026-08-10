@@ -1,6 +1,14 @@
-import { dirname, join } from "node:path";
+import {
+  mkdtempSync,
+  mkdirSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join, parse } from "node:path";
 
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
   CODEX_EXECUTION_POLICY,
@@ -13,6 +21,7 @@ const EXPECTED_POLICY = {
   backend: "exec",
   sandbox: "read-only",
   approvalPolicy: "never",
+  mcpServers: "disabled",
   disabledFeatures: [
     "shell_tool",
     "apps",
@@ -43,6 +52,16 @@ const EXPECTED_POLICY = {
   ephemeral: true,
   strictConfig: true,
 };
+
+let tempRoot: string;
+
+beforeEach(() => {
+  tempRoot = mkdtempSync(join(tmpdir(), "codexapi-policy-test-"));
+});
+
+afterEach(() => {
+  rmSync(tempRoot, { recursive: true, force: true });
+});
 
 describe("Codex execution policy", () => {
   it("exposes an immutable, JSON-safe projection of the fixed policy", () => {
@@ -76,20 +95,83 @@ describe("Codex execution policy", () => {
     },
   );
 
-  it.each([process.cwd(), dirname(process.cwd())])(
+  it.each([
+    process.cwd(),
+    dirname(process.cwd()),
+    join(process.cwd(), "nested-inference"),
+  ])(
     "rejects a source-bearing workspace: %s",
     (codexWorkspace) => {
       expect(() => assertSafeExecutionConfig({ codexWorkspace })).toThrow(
-        "CODEX_WORKSPACE must be a dedicated inference directory.",
+        "CODEX_WORKSPACE must be outside source and current working directories.",
       );
     },
   );
 
-  it("accepts an explicitly configured dedicated inference directory", () => {
+  it("rejects filesystem roots", () => {
     expect(() =>
-      assertSafeExecutionConfig({
-        codexWorkspace: join(process.cwd(), ".codexapi-inference-test"),
-      }),
+      assertSafeExecutionConfig({ codexWorkspace: parse(process.cwd()).root }),
+    ).toThrow("CODEX_WORKSPACE must not be a filesystem root.");
+  });
+
+  it("rejects a missing workspace", () => {
+    expect(() =>
+      assertSafeExecutionConfig({ codexWorkspace: join(tempRoot, "missing") }),
+    ).toThrow("CODEX_WORKSPACE must exist as an empty directory.");
+  });
+
+  it("rejects a workspace that is not a directory", () => {
+    const filePath = join(tempRoot, "workspace.txt");
+    writeFileSync(filePath, "not a directory", "utf8");
+
+    expect(() => assertSafeExecutionConfig({ codexWorkspace: filePath })).toThrow(
+      "CODEX_WORKSPACE must exist as an empty directory.",
+    );
+  });
+
+  it("rejects a symbolic-link or reparse-point workspace", () => {
+    const targetPath = join(tempRoot, "target");
+    const linkPath = join(tempRoot, "linked-workspace");
+    mkdirSync(targetPath);
+    symlinkSync(targetPath, linkPath, process.platform === "win32" ? "junction" : "dir");
+
+    expect(() => assertSafeExecutionConfig({ codexWorkspace: linkPath })).toThrow(
+      "CODEX_WORKSPACE must not be a symbolic link or reparse point.",
+    );
+  });
+
+  it("rejects a workspace reached through a symbolic-link ancestor", () => {
+    const targetParent = join(tempRoot, "target-parent");
+    const targetWorkspace = join(targetParent, "workspace");
+    const linkParent = join(tempRoot, "linked-parent");
+    mkdirSync(targetWorkspace, { recursive: true });
+    symlinkSync(
+      targetParent,
+      linkParent,
+      process.platform === "win32" ? "junction" : "dir",
+    );
+
+    expect(() =>
+      assertSafeExecutionConfig({ codexWorkspace: join(linkParent, "workspace") }),
+    ).toThrow("CODEX_WORKSPACE must not be a symbolic link or reparse point.");
+  });
+
+  it("rejects a non-empty workspace", () => {
+    const workspace = join(tempRoot, "non-empty");
+    mkdirSync(workspace);
+    writeFileSync(join(workspace, "payload.txt"), "content", "utf8");
+
+    expect(() => assertSafeExecutionConfig({ codexWorkspace: workspace })).toThrow(
+      "CODEX_WORKSPACE must be empty.",
+    );
+  });
+
+  it("accepts an explicitly configured dedicated inference directory", () => {
+    const workspace = join(tempRoot, "empty-inference");
+    mkdirSync(workspace);
+
+    expect(() =>
+      assertSafeExecutionConfig({ codexWorkspace: workspace }),
     ).not.toThrow();
   });
 });

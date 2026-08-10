@@ -171,6 +171,8 @@ function runCodexProcess(
     CODEX_EXECUTION_POLICY.sandbox,
     "-c",
     `approval_policy=${tomlString(CODEX_EXECUTION_POLICY.approvalPolicy)}`,
+    "-c",
+    "mcp_servers={}",
     "--ignore-user-config",
     "--ignore-rules",
     "--ephemeral",

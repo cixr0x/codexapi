@@ -7,6 +7,7 @@ import { createCallLogger, type CallLogger, type CallLogEntry } from "./callLogg
 import {
   CODEX_REASONING_EFFORTS,
   type AppConfig,
+  defaultCodexCommand,
   isCodexReasoningEffort,
   loadConfig,
 } from "./config.js";
@@ -17,6 +18,7 @@ import {
   type CodexRunResult,
   type CodexRunner,
 } from "./codexRunner.js";
+import { assertSafeExecutionConfig } from "./executionPolicy.js";
 import {
   OpenAIHttpError,
   buildChatPrompt,
@@ -380,9 +382,11 @@ function hasCodexRunOptions(options: CodexRunOptions): boolean {
 }
 
 function createConfiguredCodexRunner(config: AppConfig): CodexRunner {
+  assertSafeExecutionConfig(config);
+  const command = defaultCodexCommand(process.platform);
   return createCodexRunner({
-    command: config.codexCommand,
-    commandArgs: config.codexCommandArgs,
+    command: command.command,
+    commandArgs: command.args,
     workspace: config.codexWorkspace,
     timeoutMs: config.codexTimeoutMs,
   });

@@ -1,10 +1,16 @@
-import { join, resolve } from "node:path";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 
 import { defaultCodexCommand, loadConfig } from "../src/config.js";
 
-const SAFE_WORKSPACE = resolve(process.cwd(), ".codexapi-inference-test");
+const SAFE_WORKSPACE = mkdtempSync(join(tmpdir(), "codexapi-config-test-"));
+
+afterAll(() => {
+  rmSync(SAFE_WORKSPACE, { recursive: true, force: true });
+});
 
 function loadTestConfig(
   env: NodeJS.ProcessEnv = {},
@@ -34,7 +40,7 @@ describe("config", () => {
     expect(defaultCodexCommand("linux")).toEqual({ command: "codex", args: [] });
   });
 
-  it("allows an executable override without accepting arbitrary runner arguments", () => {
+  it("does not expose environment-controlled Codex executable configuration", () => {
     const config = loadTestConfig(
       {
         CODEX_COMMAND: "node",
@@ -45,8 +51,8 @@ describe("config", () => {
       "win32",
     );
 
-    expect(config.codexCommand).toBe("node");
-    expect(config.codexCommandArgs).toEqual([]);
+    expect(config).not.toHaveProperty("codexCommand");
+    expect(config).not.toHaveProperty("codexCommandArgs");
   });
 
   it("parses API-level call logging config", () => {
@@ -122,7 +128,9 @@ describe("config", () => {
   it("rejects the repository/current working directory as the Codex workspace", () => {
     expect(() =>
       loadConfig({ CODEX_WORKSPACE: process.cwd() }, process.cwd(), process.platform),
-    ).toThrow("CODEX_WORKSPACE must be a dedicated inference directory.");
+    ).toThrow(
+      "CODEX_WORKSPACE must be outside source and current working directories.",
+    );
   });
 
   it("requires an explicitly configured Codex workspace", () => {

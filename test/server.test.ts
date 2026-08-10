@@ -59,19 +59,7 @@ function testConfig() {
     port: 3001,
     codexBackend: "exec" as const,
     codexWorkspace: "C:/workspace",
-    codexCommand: "codex",
-    codexCommandArgs: [],
-    codexProfile: "plain",
-    codexIgnoreUserConfig: true,
-    codexDisablePlugins: true,
-    codexDisableShellSnapshot: true,
-    codexEphemeral: true,
-    codexIgnoreRules: true,
     codexTimeoutMs: 120000,
-    codexAppServerPort: 0,
-    codexAppServerStartTimeoutMs: 10000,
-    codexAppServerDisableApps: true,
-    codexAppServerDisableNodeReplMcp: true,
     codexDefaultModel: "gpt-5.4-mini",
     codexAllowedModels: ["gpt-5.4-mini", "gpt-5.5", "gpt-5.6-sol"],
     codexReasoningEffort: "medium" as const,
@@ -87,6 +75,12 @@ afterEach(async () => {
     tempDirs.map((dir) => rm(dir, { recursive: true, force: true })),
   );
   tempDirs = [];
+});
+
+it("fails closed when direct config bypasses safe workspace loading", () => {
+  expect(() => createServer({ config: testConfig() })).toThrow(
+    "CODEX_WORKSPACE must exist as an empty directory.",
+  );
 });
 
 async function tempDir(): Promise<string> {

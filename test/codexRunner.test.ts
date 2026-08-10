@@ -20,6 +20,8 @@ const SAFE_DEFAULT_EXEC_ARGS = [
   "read-only",
   "-c",
   'approval_policy="never"',
+  "-c",
+  "mcp_servers={}",
   "--ignore-user-config",
   "--ignore-rules",
   "--ephemeral",
