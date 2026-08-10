@@ -136,7 +136,7 @@ export function createServer(options: CreateServerOptions = {}): FastifyInstance
         endpoint: "/v1/chat/completions",
         method: request.method,
         requestBody: request.body,
-        model: selectedModel ?? requestModel(request.body),
+        model: selectedModel,
         prompt,
         codexCommand: runResult?.command ?? runnerErrorCommand(error),
         rawStdout:
@@ -209,7 +209,7 @@ export function createServer(options: CreateServerOptions = {}): FastifyInstance
         endpoint: "/v1/responses",
         method: request.method,
         requestBody: request.body,
-        model: selectedModel ?? requestModel(request.body),
+        model: selectedModel,
         prompt,
         codexCommand: runResult?.command ?? runnerErrorCommand(error),
         rawStdout:

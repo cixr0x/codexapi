@@ -264,6 +264,18 @@ describe("Fastify server", () => {
       "tool_choice",
     ],
     [
+      "Responses tool choice without tools",
+      "/v1/responses",
+      { input: "Hello", tool_choice: "required" },
+      "tool_choice",
+    ],
+    [
+      "Responses tool choice with empty tools",
+      "/v1/responses",
+      { input: "Hello", tools: [], tool_choice: "required" },
+      "tool_choice",
+    ],
+    [
       "chat tools",
       "/v1/chat/completions",
       { messages: [{ role: "user", content: "Hello" }], tools: [{ type: "web_search" }] },
@@ -288,6 +300,50 @@ describe("Fastify server", () => {
     expect(response.statusCode).toBe(400);
     expect(response.json()).toMatchObject({ error: { type: "invalid_request_error", param } });
     expect(runWithDetails).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it.each([
+    [
+      "chat",
+      "/v1/chat/completions",
+      { messages: [{ role: "user", content: "Hello" }] },
+      "https://user:secret@example.test/x",
+    ],
+    [
+      "Responses",
+      "/v1/responses",
+      { input: "Hello" },
+      "C:\\temp\\unvalidated-model.json",
+    ],
+  ])("does not log an unvalidated model identifier after %s validation fails", async (
+    _name,
+    url,
+    payload,
+    unvalidatedModel,
+  ) => {
+    const logDir = await tempDir();
+    const { runner, runWithDetails } = fakeDetailedRunner();
+    const app = createServer({
+      config: { ...testConfig(), callLoggingEnabled: true, callLogDir: logDir },
+      runner,
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url,
+      payload: { ...payload, model: unvalidatedModel },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({
+      error: { type: "invalid_request_error", param: "model" },
+    });
+    expect(runWithDetails).not.toHaveBeenCalled();
+
+    const logContent = await readFile(join(logDir, "calls.jsonl"), "utf8");
+    expect(JSON.parse(logContent)).not.toHaveProperty("model");
+    expect(logContent).not.toContain(unvalidatedModel);
     await app.close();
   });
 

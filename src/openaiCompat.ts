@@ -283,6 +283,14 @@ function rejectChatTools(request: JsonRecord): void {
 }
 
 function parseWebSearch(body: JsonRecord): boolean {
+  if (body.tool_choice !== undefined && body.tool_choice !== "auto") {
+    throw openAiError(
+      'tool_choice must be "auto".',
+      "invalid_request_error",
+      "tool_choice",
+    );
+  }
+
   if (body.tools === undefined || (Array.isArray(body.tools) && body.tools.length === 0)) {
     return false;
   }
@@ -298,14 +306,6 @@ function parseWebSearch(body: JsonRecord): boolean {
       "Only one web_search tool is supported.",
       "invalid_request_error",
       "tools",
-    );
-  }
-
-  if (body.tool_choice !== undefined && body.tool_choice !== "auto") {
-    throw openAiError(
-      'tool_choice must be "auto".',
-      "invalid_request_error",
-      "tool_choice",
     );
   }
 
