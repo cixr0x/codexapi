@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { SpawnFn } from "../src/codexRunner.js";
 import { assertCodexCapabilities } from "../src/codexCapabilityCheck.js";
+import { CODEX_EXECUTION_POLICY } from "../src/executionPolicy.js";
 
 class FakeReadable extends EventEmitter {}
 
@@ -195,12 +196,12 @@ describe("Codex capability startup check", () => {
   });
 
   it.each([
-    "codex-cli 0.144.1 extra\n",
-    "codex-cli 0.144.1-beta\n",
-    "codex-cli 0.144.1\ncodex-cli 0.144.1\n",
+    "codex-cli 0.147.0 extra\n",
+    "codex-cli 0.147.0-beta\n",
+    "codex-cli 0.147.0\ncodex-cli 0.147.0\n",
     "codex-cli 999999999999999999999.144.1\n",
     "codex-cli 01.144.1\n",
-    "Codex-cli 0.144.1\n",
+    "Codex-cli 0.147.0\n",
   ])("rejects malformed complete version output %j", async (versionOutput) => {
     const spawn = createProbeSpawn([{ stdout: versionOutput }]);
 
@@ -360,8 +361,48 @@ describe("Codex capability startup check", () => {
     ]);
 
     await expect(assertCodexCapabilities(testConfig(), spawn)).rejects.toThrow(
-      /item_ids feature is enabled/i,
+      /item_ids feature is incompatible/i,
     );
+    expect(spawn.calls).toHaveLength(2);
+  });
+
+  it.each(
+    CODEX_EXECUTION_POLICY.allowedEnabledFeatures.flatMap((feature) => [
+      [
+        feature.name,
+        "missing",
+        DISABLED_FEATURE_OUTPUT.replace(
+          `${feature.name} ${feature.maturity} true\n`,
+          "",
+        ),
+        new RegExp(`Codex ${feature.name} feature was not reported`, "i"),
+      ],
+      [
+        feature.name,
+        "false",
+        DISABLED_FEATURE_OUTPUT.replace(
+          `${feature.name} ${feature.maturity} true`,
+          `${feature.name} ${feature.maturity} false`,
+        ),
+        new RegExp(`Codex ${feature.name} feature is incompatible with this policy`, "i"),
+      ],
+      [
+        feature.name,
+        "maturity drift",
+        DISABLED_FEATURE_OUTPUT.replace(
+          `${feature.name} ${feature.maturity} true`,
+          `${feature.name} deprecated true`,
+        ),
+        new RegExp(`Codex ${feature.name} feature is incompatible with this policy`, "i"),
+      ],
+    ]),
+  )("rejects allowlisted feature %s when its exact state is %s", async (_name, _state, featureOutput, message) => {
+    const spawn = createProbeSpawn([
+      { stdout: "codex-cli 0.147.0\n" },
+      { stdout: featureOutput },
+    ]);
+
+    await expect(assertCodexCapabilities(testConfig(), spawn)).rejects.toThrow(message);
     expect(spawn.calls).toHaveLength(2);
   });
 
@@ -379,6 +420,22 @@ describe("Codex capability startup check", () => {
     [
       "incompatible",
       DISABLED_FEATURE_OUTPUT.replace("view_image stable false", "view_image preview false"),
+      /view_image feature is incompatible/i,
+    ],
+    [
+      "experimental false",
+      DISABLED_FEATURE_OUTPUT.replace(
+        "view_image stable false",
+        "view_image experimental false",
+      ),
+      /view_image feature is incompatible/i,
+    ],
+    [
+      "removed false",
+      DISABLED_FEATURE_OUTPUT.replace(
+        "view_image stable false",
+        "view_image removed false",
+      ),
       /view_image feature is incompatible/i,
     ],
     [

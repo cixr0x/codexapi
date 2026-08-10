@@ -298,12 +298,6 @@ function parseDisabledFeatureOutput(output: string): "stable" | "experimental" {
     "removed",
     "deprecated",
   ]);
-  const allowedEnabledFeatures = new Map<string, string>(
-    CODEX_EXECUTION_POLICY.allowedEnabledFeatures.map((feature) => [
-      feature.name,
-      feature.maturity,
-    ]),
-  );
   const features = new Map<
     string,
     { maturity: string; enabled: boolean }
@@ -327,9 +321,6 @@ function parseDisabledFeatureOutput(output: string): "stable" | "experimental" {
       throw new Error(`Codex ${name} feature is incompatible with this policy.`);
     }
     const enabled = enabledText === "true";
-    if (enabled && allowedEnabledFeatures.get(name!) !== maturity) {
-      throw new Error(`Codex ${name} feature is enabled but is not allowed by this policy.`);
-    }
     features.set(name!, { maturity: maturity!, enabled });
   }
 
@@ -349,6 +340,35 @@ function parseDisabledFeatureOutput(output: string): "stable" | "experimental" {
         throw new Error("Codex shell_tool feature is incompatible with this policy.");
       }
       shellToolFeature = feature.maturity;
+    }
+  }
+
+  const exactFeatureStates = [
+    { name: "view_image", maturity: "stable", enabled: false },
+    ...CODEX_EXECUTION_POLICY.allowedEnabledFeatures.map((feature) => ({
+      ...feature,
+      enabled: true,
+    })),
+  ];
+  for (const expected of exactFeatureStates) {
+    const feature = features.get(expected.name);
+    if (!feature) {
+      throw new Error(`Codex ${expected.name} feature was not reported.`);
+    }
+    if (
+      feature.enabled !== expected.enabled ||
+      feature.maturity !== expected.maturity
+    ) {
+      throw new Error(`Codex ${expected.name} feature is incompatible with this policy.`);
+    }
+  }
+
+  const allowedEnabledNames = new Set<string>(
+    CODEX_EXECUTION_POLICY.allowedEnabledFeatures.map((feature) => feature.name),
+  );
+  for (const [name, feature] of features) {
+    if (feature.enabled && !allowedEnabledNames.has(name)) {
+      throw new Error(`Codex ${name} feature is enabled but is not allowed by this policy.`);
     }
   }
 
