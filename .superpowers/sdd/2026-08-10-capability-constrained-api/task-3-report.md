@@ -261,3 +261,80 @@ The independent reviewer re-checked the close-only boundary, late-close reaper, 
 - The termination tests distinguish a reported signal attempt and `exit` from verified stream closure, cover ignored graceful termination and `kill() === false`, and prove temporary cleanup does not race an unverified child or inherited stdio.
 - The syntax tests cover every reported bypass location and prove rejection precedes all fetch/runner effects.
 - No known blocker remains. The intentional fatal fallback retains an image/schema directory while native-process closure cannot be verified, then a late-close reaper cleans both resources. If `close` never arrives, the quarantine remains; that is preferable to deleting a file that a possibly live process or descendant-held stream still uses. It is reported as `codex_termination_failed`, not as successful cancellation or cleanup.
+
+## Fix Round 2
+
+### Finding and root cause
+
+The Fix Round 1 full-body scanner remained iterative and cycle-safe, but it used argument spread to enqueue every child of an array:
+
+```ts
+pending.push(...current);
+```
+
+V8 applies an argument-count/stack limit to that call even though the scanner itself does not recurse. A valid Responses body containing 130,000 one-character input items is only 520,011 bytes, below Fastify's default 1 MiB body limit, but it raised `RangeError: Maximum call stack size exceeded`. The analogous malformed-image body is 520,063 bytes and reached the generic server error path as HTTP 500 instead of the required bounded HTTP 400.
+
+The first minimal scanner fix exposed the same width-dependent argument spread one layer later in prompt construction at `lines.push(...formattedInput.lines)`. Both untrusted-width spreads had to be removed for broad valid input to normalize fully.
+
+### TDD RED evidence
+
+Baseline before the new regressions:
+
+```powershell
+npm test -- --run test/openaiCompat.test.ts test/server.test.ts
+```
+
+Exit 0: 2 files / 80 tests passed.
+
+After adding the broad valid and broad malformed-image cases, the same command exited 1 with 2 failures and 80 passes:
+
+- the valid normalization case threw `RangeError` from `findInputImageOccurrences()` at the spread enqueue;
+- the malformed-image route returned 500 instead of 400. The request remained below the Fastify body limit, and the test required zero image-fetch and zero Codex-runner calls.
+
+After replacing only the scanner enqueue, the server case passed but the valid case remained RED with `RangeError` at `lines.push(...formattedInput.lines)`. This confirmed a second occurrence of the same argument-width root cause rather than a recursive scanner failure.
+
+### GREEN implementation
+
+- `findInputImageOccurrences()` now iterates each array/object child and pushes it individually onto the existing explicit stack.
+- `normalizeResponsesRequest()` likewise appends each formatted input line individually.
+- Traversal remains iterative and object-identity cycle-safe. Child order, the occurrence list, the direct-part identity comparison, and sole-image validation semantics are unchanged.
+- The broad valid request now normalizes to the hand-derived prompt length with no image and web search disabled.
+- The broad malformed request returns HTTP 400 `invalid_input_image` with `param: input`, before any fetch or runner call.
+
+Focused GREEN:
+
+```powershell
+npm test -- --run test/openaiCompat.test.ts test/server.test.ts
+```
+
+Exit 0: 2 files / 82 tests passed.
+
+### Fix Round 2 verification
+
+```powershell
+npm test -- --run test/safeRemoteImage.test.ts test/openaiCompat.test.ts test/server.test.ts test/codexRunner.test.ts test/config.test.ts test/codexCliIsolation.test.ts
+```
+
+Exit 0: 6 files / 185 tests passed.
+
+```powershell
+npm test
+```
+
+Exit 0: all 9 files / 223 tests passed.
+
+```powershell
+npm run typecheck
+npm run build
+git diff --check
+```
+
+All exited 0. TypeScript emitted no diagnostics. The diff check was clean; Git printed only the repository's configured LF-to-CRLF notices.
+
+### Fix Round 2 files and self-review
+
+- Modified production: `src/openaiCompat.ts`
+- Modified tests: `test/openaiCompat.test.ts`, `test/server.test.ts`
+- Appended report: `.superpowers/sdd/2026-08-10-capability-constrained-api/task-3-report.md`
+- The mutation check is direct: restoring either width-dependent spread makes the broad valid test fail; restoring the scanner spread also changes the broad malformed route from bounded 400 to 500.
+- No service, port, network, DNS, database, deployment, or production state was touched. No known blocker or new residual concern remains from this fix.

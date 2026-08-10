@@ -126,7 +126,9 @@ export function normalizeResponsesRequest(body: unknown): NormalizedResponsesReq
   }
 
   const formattedInput = formatResponseInput(request.input, inputImage);
-  lines.push(...formattedInput.lines);
+  for (const line of formattedInput.lines) {
+    lines.push(line);
+  }
   const format = getResponseTextFormat(request);
   if (format) {
     lines.push(buildStructuredOutputInstructions(format));
@@ -460,7 +462,10 @@ function findInputImageOccurrences(value: unknown): InputImagePart[] {
       continue;
     }
     visited.add(current);
-    pending.push(...(Array.isArray(current) ? current : Object.values(current)));
+    const children = Array.isArray(current) ? current : Object.values(current);
+    for (const child of children) {
+      pending.push(child);
+    }
   }
 
   return occurrences;

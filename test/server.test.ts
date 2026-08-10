@@ -12,6 +12,8 @@ import type {
 } from "../src/safeRemoteImage.js";
 import { createServer, isMainModule } from "../src/server.js";
 
+const BROAD_INPUT_ITEM_COUNT = 130_000;
+
 const responseSchema = {
   type: "object",
   additionalProperties: false,
@@ -626,6 +628,47 @@ describe("Fastify server", () => {
         code: "unsupported_chat_image",
       },
     });
+    expect(runWithDetails).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it("returns bounded 400 for malformed image syntax in a broad request", async () => {
+    const input: unknown[] = Array.from(
+      { length: BROAD_INPUT_ITEM_COUNT },
+      () => "x",
+    );
+    input[input.length - 1] = {
+      type: "input_image",
+      image_url: "file:///etc/passwd",
+    };
+    const payload = { input };
+    expect(Buffer.byteLength(JSON.stringify(payload), "utf8")).toBeLessThan(
+      1024 * 1024,
+    );
+
+    const image = fakeImagePreparer({ path: null });
+    const { runner, runWithDetails } = fakeDetailedRunner();
+    const app = createServer({
+      config: testConfig(),
+      runner,
+      prepareRemoteImage: image.prepareRemoteImage,
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/responses",
+      payload,
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({
+      error: {
+        type: "invalid_request_error",
+        param: "input",
+        code: "invalid_input_image",
+      },
+    });
+    expect(image.prepareRemoteImage).not.toHaveBeenCalled();
     expect(runWithDetails).not.toHaveBeenCalled();
     await app.close();
   });

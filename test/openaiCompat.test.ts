@@ -10,6 +10,8 @@ import {
 } from "../src/openaiCompat.js";
 import { StructuredOutputError } from "../src/structuredOutput.js";
 
+const BROAD_INPUT_ITEM_COUNT = 130_000;
+
 const responseSchema = {
   type: "object",
   additionalProperties: false,
@@ -210,6 +212,23 @@ describe("OpenAI compatibility mapping", () => {
         }),
       }),
     );
+  });
+
+  it("normalizes a broad Responses input without overflowing the call stack", () => {
+    const input = Array.from({ length: BROAD_INPUT_ITEM_COUNT }, () => "x");
+    const request = { input };
+
+    expect(Buffer.byteLength(JSON.stringify(request), "utf8")).toBeLessThan(
+      1024 * 1024,
+    );
+
+    const normalized = normalizeResponsesRequest(request);
+
+    expect(normalized).toMatchObject({
+      webSearch: false,
+      imageUrl: null,
+    });
+    expect(normalized.prompt).toHaveLength(BROAD_INPUT_ITEM_COUNT * 9 - 1);
   });
 
   it.each([
