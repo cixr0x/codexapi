@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
-import { access, readFile } from "node:fs/promises";
+import { access, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { describe, expect, it, vi } from "vitest";
 
@@ -99,6 +99,10 @@ class FakeChildProcess extends EventEmitter {
 
   close(code: number | null): void {
     this.emit("close", code, null);
+  }
+
+  exit(code: number | null): void {
+    this.emit("exit", code, null);
   }
 
   fail(error: Error): void {
@@ -596,8 +600,73 @@ describe("Codex runner", () => {
     expect(child.kill).toHaveBeenCalledTimes(1);
   });
 
-  it("settles cancellation after a bounded grace when kill yields no process event", async () => {
+  it("force-kills after graceful termination is ignored and waits for verified close", async () => {
     vi.useFakeTimers();
+    const controller = new AbortController();
+    const child = new FakeChildProcess();
+    const spawn = createFakeSpawn(child);
+    const runner = createCodexRunner({
+      command: "codex",
+      commandArgs: [],
+      workspace: "C:/workspace",
+      codexHome: TEST_CODEX_HOME,
+      timeoutMs: 1000,
+      terminationGraceMs: 50,
+      forceTerminationGraceMs: 50,
+      spawn,
+    });
+    let settled = false;
+
+    const resultPromise = runner.runWithDetails!("sensitive prompt", {
+      signal: controller.signal,
+    });
+    void resultPromise.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+    const expectation = expect(resultPromise).rejects.toMatchObject({
+      code: "CANCELLED",
+      message: "Codex command was cancelled.",
+    });
+
+    try {
+      controller.abort();
+      expect(child.kill).toHaveBeenNthCalledWith(1, "SIGTERM");
+      await vi.advanceTimersByTimeAsync(49);
+      await expect(Promise.race([
+        resultPromise.then(
+          () => "settled",
+          () => "settled",
+        ),
+        Promise.resolve("pending"),
+      ])).resolves.toBe("pending");
+      await vi.advanceTimersByTimeAsync(1);
+      expect(child.kill).toHaveBeenNthCalledWith(2, "SIGKILL");
+      expect(settled).toBe(false);
+
+      child.exit(null);
+      await Promise.resolve();
+      expect(settled).toBe(false);
+
+      child.close(null);
+      await expectation;
+      expect(child.kill).toHaveBeenCalledTimes(2);
+      expect(vi.getTimerCount()).toBe(0);
+      expect(child.eventNames()).toEqual([]);
+      expect(child.stdout.eventNames()).toEqual([]);
+      expect(child.stderr.eventNames()).toEqual([]);
+    } finally {
+      await vi.runAllTimersAsync();
+      await resultPromise.catch(() => undefined);
+      vi.useRealTimers();
+    }
+  });
+
+  it("returns a fatal error and retains the schema when force termination is unverified", async () => {
     const controller = new AbortController();
     const child = new FakeChildProcess();
     child.kill.mockReturnValue(false);
@@ -608,36 +677,53 @@ describe("Codex runner", () => {
       workspace: "C:/workspace",
       codexHome: TEST_CODEX_HOME,
       timeoutMs: 1000,
-      terminationGraceMs: 50,
+      terminationGraceMs: 5,
+      forceTerminationGraceMs: 5,
       spawn,
     });
 
     const resultPromise = runner.runWithDetails!("sensitive prompt", {
       signal: controller.signal,
+      outputSchema: { type: "object" },
     });
-    const expectation = expect(resultPromise).rejects.toMatchObject({
-      code: "CANCELLED",
-      message: "Codex command was cancelled.",
+    await waitUntil(() => spawn.mock.calls.length === 1);
+    const args = spawn.mock.calls[0]?.[1] ?? [];
+    const schemaPath = args[args.indexOf("--output-schema") + 1]!;
+    let fatalError: CodexRunnerError | undefined;
+    const capturedResult = resultPromise.catch((error: unknown) => {
+      fatalError = error as CodexRunnerError;
     });
 
     try {
       controller.abort();
-      expect(child.kill).toHaveBeenCalledTimes(1);
-      await vi.advanceTimersByTimeAsync(49);
-      await expect(Promise.race([
-        resultPromise.then(
-          () => "settled",
-          () => "settled",
-        ),
-        Promise.resolve("pending"),
-      ])).resolves.toBe("pending");
-      await vi.advanceTimersByTimeAsync(1);
-      await expectation;
-      expect(child.kill).toHaveBeenCalledTimes(1);
+      await capturedResult;
+      expect(fatalError).toMatchObject({
+        code: "TERMINATION_FAILED",
+        childMayBeRunning: true,
+        message: "Codex process could not be terminated.",
+      });
+      expect(child.kill.mock.calls).toEqual([["SIGTERM"], ["SIGKILL"]]);
+      await expect(access(schemaPath)).resolves.toBeUndefined();
+      expect(child.listenerCount("close")).toBe(1);
+      expect(child.listenerCount("error")).toBe(1);
+
+      child.exit(null);
+      await expect(access(schemaPath)).resolves.toBeUndefined();
+
+      const cleanupWhenSafe = fatalError?.cleanupWhenSafe;
+      expect(cleanupWhenSafe).toBeInstanceOf(Promise);
+      child.close(null);
+      await cleanupWhenSafe!;
+      await vi.waitFor(async () => {
+        await expect(access(schemaPath)).rejects.toThrow();
+      });
+      expect(child.kill).toHaveBeenCalledTimes(2);
+      expect(child.eventNames()).toEqual([]);
+      expect(child.stdout.eventNames()).toEqual([]);
+      expect(child.stderr.eventNames()).toEqual([]);
     } finally {
-      await vi.runAllTimersAsync();
-      await resultPromise.catch(() => undefined);
-      vi.useRealTimers();
+      await capturedResult;
+      await rm(dirname(schemaPath), { recursive: true, force: true });
     }
   });
 
@@ -657,6 +743,7 @@ describe("Codex runner", () => {
       codexHome: TEST_CODEX_HOME,
       timeoutMs: 1000,
       terminationGraceMs: 50,
+      forceTerminationGraceMs: 50,
       spawn,
     });
 

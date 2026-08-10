@@ -135,3 +135,129 @@ An independent final security review also re-ran the focused matrix (including t
 ## Concern
 
 No known functional or security blocker remains. As an unavoidable OS-level residual, a directory that remains undeletable after all three bounded removal attempts can persist; the cleanup object remains retryable and API behavior/logging stays bounded. Ordinary cancellation waits for process exit/close before deletion, which removes the Windows open-handle race that motivated this hardening.
+
+## Fix Round 1
+
+### Scope and outcome
+
+This round addressed the two Important review findings without starting a service, touching port 3001, opening a network socket, using live DNS/HTTP, changing a database, deploying, or writing outside the isolated worktree.
+
+1. Cancellation no longer launches Codex through the JavaScript shim and no longer settles ordinary cancellation/timeout merely because a grace period elapsed. The runner now targets the validated platform-native Codex process, escalates from `SIGTERM` to `SIGKILL`, and requires an observed `close` before ordinary resource cleanup; `exit` alone is not a cleanup boundary.
+2. Responses and Chat now use a cycle-safe full-body occurrence scan. A Responses request is accepted only when the entire request contains exactly one `input_image` occurrence and that occurrence is the accepted direct message-content part. Chat rejects any occurrence anywhere in the body.
+
+### Finding 1 RED: unverified process termination
+
+The review reproduced the Windows launcher boundary:
+
+```text
+CodexAPI -> node.exe -> @openai/codex/bin/codex.js -> native codex.exe
+```
+
+Killing the Node launcher could leave the native process behind, while the old grace callback rejected with ordinary `CANCELLED` and allowed image/schema deletion without observing process termination.
+
+New adversarial tests covered both signal-delivery failure modes:
+
+- a graceful kill reports success but produces no lifecycle event, requiring a later `SIGKILL` and still remaining unsettled through `exit` until verified `close`;
+- both `kill` calls return `false` and no lifecycle event arrives, requiring a bounded fatal result, retained schema, no ordinary cleanup, exactly two kill attempts, and listener/timer removal;
+- the server receives the fatal state with a prepared image, returns only a fixed bounded error, retains the image lease, and persists neither URL nor path in its allowlisted log.
+
+Before production changes:
+
+```powershell
+npm test -- --run test/codexRunner.test.ts test/server.test.ts
+```
+
+Exit 1: 3 tests failed and 59 passed. The runner used an unqualified default kill, settled the no-event case as `CANCELLED`, deleted the schema, and mapped the fatal server case through the generic CLI error path.
+
+The native-command contract was separately driven RED:
+
+```powershell
+npm test -- --run test/config.test.ts
+```
+
+Exit 1: 1 test failed and 18 passed because `defaultCodexCommand()` returned absolute `node.exe` plus `bin/codex.js`, not the platform-native executable.
+
+### Finding 1 GREEN: direct native process and truthful cleanup
+
+- `defaultCodexCommand()` maps only the six supported platform/architecture pairs. It validates the exact base package name/version, the exact optional native dependency alias, the exact suffix-versioned platform package, and the canonical native executable's containment under that package. It returns the absolute native executable with no launcher arguments and has no `PATH`, `APPDATA`, wrapper, or caller-command fallback.
+- The installed Windows x64 command resolves to the pinned `@openai/codex-win32-x64` package's `vendor/x86_64-pc-windows-msvc/bin/codex.exe`. The existing command-isolation tests successfully execute the direct native CLI.
+- Cancellation and timeout use the same two-stage termination state machine while retaining distinct ordinary result codes. A one-second graceful deadline is followed by `SIGKILL` and a separate one-second force deadline.
+- `kill()` return values, `child.killed`, and `exit` are never treated as the resource-release boundary. Only `close` yields ordinary `CANCELLED` or `TIMEOUT`; duplicate lifecycle events cannot double-settle.
+- If force termination remains unverified, the runner returns fixed `TERMINATION_FAILED` with `childMayBeRunning: true`. Output-schema and prepared-image cleanup are withheld while a possibly live process or inherited stdio remains open. The error carries an internal `cleanupWhenSafe` promise; a guarded late-close reaper removes both quarantined resources exactly once if `close` eventually arrives.
+- The fatal API result is fixed `500 codex_termination_failed`; stderr, command details, image URL, and temporary paths cannot enter the response or allowlisted call log.
+- Timeout and abort listeners/timers are removed at bounded request settlement. On the fatal path, bounded stdout/stderr plus `error`/`close` listeners intentionally remain as the late reaper and are removed when `close` arrives; ordinary paths remove all listeners on settlement.
+
+### Final lifecycle review RED and correction
+
+The independent final review found that the first GREEN implementation still treated `exit` as sufficient and removed all process listeners on the bounded fatal response. Node can emit `exit` before inherited stdio closes, and removing the final `close` listener made quarantined files permanent even if the process later closed.
+
+The final two-file RED was:
+
+```powershell
+npm test -- --run test/codexRunner.test.ts test/server.test.ts
+```
+
+Exit 1: 3 tests failed and 59 passed. The runner settled on `exit`, removed its late `close`/`error` listeners, and the server never cleaned the prepared image after a simulated late close.
+
+After the correction, the same command exited 0 with 2 files / 62 tests. The force test now proves `exit` does not settle, the fatal schema test proves schema retention through `exit` and deletion after late `close`, and the server test proves the image remains quarantined until the same safety signal resolves. All child/stream listeners are then removed.
+
+### Finding 2 RED: additional image syntax bypass
+
+The former scanner stopped exploring message siblings when `content` was an array and stopped exploring properties after recognizing a valid image object. Eight new compatibility/server regressions demonstrated successful normalization or HTTP 200 for:
+
+- an accepted direct image plus an image in a message sibling;
+- an image nested inside an otherwise valid direct image object;
+- an image in a top-level Responses property outside `input`;
+- an image in a Chat property outside `messages`.
+
+Each server case also asserted zero fetch and zero Codex runner calls.
+
+```powershell
+npm test -- --run test/openaiCompat.test.ts test/server.test.ts
+```
+
+Initial exit 1: 8 new tests failed and 71 passed. After the full-body parser change, exit 0: 2 files / 79 tests passed.
+
+### Finding 2 GREEN: sole accepted occurrence
+
+- The iterative scanner uses an object-identity visited set, terminates on cycles, and traverses every enumerable property of every array/object, including recognized image objects and message siblings.
+- Responses separately identifies direct message-content image parts, then requires exactly one full-body occurrence, exactly one direct part, and identity equality between them.
+- The accepted part must still have a string `image_url` and no `file_id`; duplicate direct images retain the bounded `multiple_input_images` error.
+- All other Responses occurrences return HTTP 400 `invalid_input_image` with `param: input`; every Chat occurrence returns HTTP 400 `unsupported_chat_image` with `param: messages`, before fetch or runner invocation.
+
+### Fix Round 1 verification
+
+```powershell
+npm test -- --run test/safeRemoteImage.test.ts test/openaiCompat.test.ts test/server.test.ts test/codexRunner.test.ts test/config.test.ts test/codexCliIsolation.test.ts
+```
+
+Exit 0: 6 files / 183 tests passed.
+
+```powershell
+npm test
+```
+
+Exit 0: all 9 files / 221 tests passed.
+
+```powershell
+npm run typecheck
+npm run build
+git diff --check
+```
+
+All exited 0. TypeScript emitted no diagnostics. The diff check was clean; Git printed only the repository's configured LF-to-CRLF notices.
+
+The independent reviewer re-checked the close-only boundary, late-close reaper, full-body occurrence validation, and cleanup/logging behavior after the correction and returned: `No blocking findings.`
+
+### Fix Round 1 files
+
+- Modified production: `src/codexRunner.ts`, `src/config.ts`, `src/openaiCompat.ts`, `src/server.ts`
+- Modified tests: `test/codexRunner.test.ts`, `test/config.test.ts`, `test/openaiCompat.test.ts`, `test/server.test.ts`
+- Appended report: `.superpowers/sdd/2026-08-10-capability-constrained-api/task-3-report.md`
+
+### Fix Round 1 self-review and concern
+
+- The direct native resolver remains fail-closed: unsupported targets, missing optional packages, wrong package versions, or escaped/missing binaries throw during command resolution; no ambient executable fallback was added.
+- The termination tests distinguish a reported signal attempt and `exit` from verified stream closure, cover ignored graceful termination and `kill() === false`, and prove temporary cleanup does not race an unverified child or inherited stdio.
+- The syntax tests cover every reported bypass location and prove rejection precedes all fetch/runner effects.
+- No known blocker remains. The intentional fatal fallback retains an image/schema directory while native-process closure cannot be verified, then a late-close reaper cleans both resources. If `close` never arrives, the quarantine remains; that is preferable to deleting a file that a possibly live process or descendant-held stream still uses. It is reported as `codex_termination_failed`, not as successful cancellation or cleanup.

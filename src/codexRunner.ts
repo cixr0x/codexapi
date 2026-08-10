@@ -10,6 +10,7 @@ export type CodexRunnerErrorCode =
   | "SPAWN_ERROR"
   | "TIMEOUT"
   | "CANCELLED"
+  | "TERMINATION_FAILED"
   | "INVALID_OUTPUT";
 
 export class CodexRunnerError extends Error {
@@ -18,6 +19,8 @@ export class CodexRunnerError extends Error {
   readonly stdout?: string;
   readonly stderr?: string;
   readonly command?: CodexCommandDetails;
+  readonly childMayBeRunning: boolean;
+  readonly cleanupWhenSafe?: Promise<void>;
 
   constructor({
     message,
@@ -26,6 +29,8 @@ export class CodexRunnerError extends Error {
     stdout,
     stderr,
     command,
+    childMayBeRunning = false,
+    cleanupWhenSafe,
   }: {
     message: string;
     code: CodexRunnerErrorCode;
@@ -33,6 +38,8 @@ export class CodexRunnerError extends Error {
     stdout?: string;
     stderr?: string;
     command?: CodexCommandDetails;
+    childMayBeRunning?: boolean;
+    cleanupWhenSafe?: Promise<void>;
   }) {
     super(message);
     this.name = "CodexRunnerError";
@@ -41,6 +48,8 @@ export class CodexRunnerError extends Error {
     this.stdout = stdout;
     this.stderr = stderr;
     this.command = command;
+    this.childMayBeRunning = childMayBeRunning;
+    this.cleanupWhenSafe = cleanupWhenSafe;
   }
 }
 
@@ -58,6 +67,7 @@ export interface CodexRunnerConfig {
   timeoutMs: number;
   maxOutputBytes?: number;
   terminationGraceMs?: number;
+  forceTerminationGraceMs?: number;
   spawn?: SpawnFn;
 }
 
@@ -143,12 +153,25 @@ async function runCodexWithOutputSchema(
 ): Promise<CodexRunResult> {
   const schemaDir = await mkdtemp(join(tmpdir(), "codexapi-output-schema-"));
   const schemaPath = join(schemaDir, "schema.json");
+  let cleanupSafe = true;
 
   try {
     await writeFile(schemaPath, JSON.stringify(options.outputSchema), "utf8");
     return await runCodexProcess(prompt, config, options, schemaPath);
+  } catch (error) {
+    if (error instanceof CodexRunnerError && error.childMayBeRunning) {
+      cleanupSafe = false;
+      if (error.cleanupWhenSafe) {
+        cleanupAfterSafeSignal(error.cleanupWhenSafe, () =>
+          rm(schemaDir, { recursive: true, force: true }),
+        );
+      }
+    }
+    throw error;
   } finally {
-    await rm(schemaDir, { recursive: true, force: true });
+    if (cleanupSafe) {
+      await rm(schemaDir, { recursive: true, force: true });
+    }
   }
 }
 
@@ -162,6 +185,7 @@ function runCodexProcess(
     timeoutMs,
     maxOutputBytes = 1024 * 1024,
     terminationGraceMs = 1000,
+    forceTerminationGraceMs = 1000,
     spawn = nodeSpawn,
   }: CodexRunnerConfig,
   options: CodexRunOptions,
@@ -212,9 +236,14 @@ function runCodexProcess(
     let stdout = "";
     let stderr = "";
     let settled = false;
+    let fatalSettlement = false;
     let termination: "TIMEOUT" | "CANCELLED" | undefined;
-    let killRequested = false;
     let terminationGraceTimer: ReturnType<typeof setTimeout> | undefined;
+    let forceTerminationGraceTimer: ReturnType<typeof setTimeout> | undefined;
+    let resolveCleanupWhenSafe!: () => void;
+    const cleanupWhenSafe = new Promise<void>((resolveCleanup) => {
+      resolveCleanupWhenSafe = resolveCleanup;
+    });
 
     const child = spawn(command, args, {
       cwd: workspace,
@@ -245,7 +274,7 @@ function runCodexProcess(
         );
       });
     };
-    const settleAfterTermination = () => {
+    const settleAfterVerifiedTermination = () => {
       settle(() => {
         const rawStdout = stdout.trimEnd();
         const finalStderr = stderr.trimEnd();
@@ -272,14 +301,15 @@ function runCodexProcess(
         );
       });
     };
-    const onChildExit = () => {
-      if (termination) {
-        settleAfterTermination();
-      }
-    };
     const onChildClose = (code: number | null) => {
+      if (fatalSettlement) {
+        removeChildListeners();
+        resolveCleanupWhenSafe();
+        return;
+      }
+
       if (termination) {
-        settleAfterTermination();
+        settleAfterVerifiedTermination();
         return;
       }
 
@@ -332,11 +362,41 @@ function runCodexProcess(
       }
       termination = reason;
       clearTimeout(timeout);
-      terminationGraceTimer = setTimeout(settleAfterTermination, terminationGraceMs);
-      if (!killRequested) {
-        killRequested = true;
-        child.kill();
+      terminationGraceTimer = setTimeout(
+        forceTerminate,
+        terminationGraceMs,
+      );
+      tryKill(child, "SIGTERM");
+    };
+    const forceTerminate = () => {
+      if (settled || !termination) {
+        return;
       }
+
+      forceTerminationGraceTimer = setTimeout(
+        failUnverifiedTermination,
+        forceTerminationGraceMs,
+      );
+      tryKill(child, "SIGKILL");
+    };
+    const failUnverifiedTermination = () => {
+      if (settled || !termination) {
+        return;
+      }
+
+      settle(() => {
+        reject(
+          new CodexRunnerError({
+            message: "Codex process could not be terminated.",
+            code: "TERMINATION_FAILED",
+            stdout: stdout.trimEnd(),
+            stderr: stderr.trimEnd(),
+            command: commandDetails,
+            childMayBeRunning: true,
+            cleanupWhenSafe,
+          }),
+        );
+      }, true);
     };
     const onAbort = () => requestTermination("CANCELLED");
     const timeout = setTimeout(() => requestTermination("TIMEOUT"), timeoutMs);
@@ -344,7 +404,6 @@ function runCodexProcess(
     child.stdout?.on("data", onStdout);
     child.stderr?.on("data", onStderr);
     child.on("error", onChildError);
-    child.on("exit", onChildExit);
     child.on("close", onChildClose);
     options.signal?.addEventListener("abort", onAbort, { once: true });
 
@@ -355,25 +414,53 @@ function runCodexProcess(
       child.stdin?.end();
     }
 
-    function settle(action: () => void): void {
+    function settle(action: () => void, retainChildListeners = false): void {
       if (settled) {
         return;
       }
 
       settled = true;
+      fatalSettlement = retainChildListeners;
+      clearRequestLifecycle();
+      if (!retainChildListeners) {
+        removeChildListeners();
+      }
+      action();
+    }
+
+    function clearRequestLifecycle(): void {
       clearTimeout(timeout);
       if (terminationGraceTimer !== undefined) {
         clearTimeout(terminationGraceTimer);
       }
+      if (forceTerminationGraceTimer !== undefined) {
+        clearTimeout(forceTerminationGraceTimer);
+      }
       options.signal?.removeEventListener("abort", onAbort);
+    }
+
+    function removeChildListeners(): void {
       child.stdout?.removeListener("data", onStdout);
       child.stderr?.removeListener("data", onStderr);
       child.removeListener("error", onChildError);
-      child.removeListener("exit", onChildExit);
       child.removeListener("close", onChildClose);
-      action();
     }
   });
+}
+
+function cleanupAfterSafeSignal(
+  cleanupWhenSafe: Promise<void>,
+  cleanup: () => Promise<void>,
+): void {
+  void cleanupWhenSafe.then(cleanup).catch(() => undefined);
+}
+
+function tryKill(child: ChildProcess, signal: NodeJS.Signals): void {
+  try {
+    child.kill(signal);
+  } catch {
+    // Failure to signal is handled by escalation and the bounded fatal fallback.
+  }
 }
 
 function cancelledRunnerError({

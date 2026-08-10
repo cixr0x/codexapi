@@ -181,6 +181,8 @@ export function createServer(options: CreateServerOptions = {}): FastifyInstance
     let webSearchEnabled = false;
     let imageDiagnosticCode: "none" | SafeImageReason = "none";
     let preparedImage = emptyPreparedRemoteImage();
+    let preparedImageCleanupSafe = true;
+    let preparedImageCleanupWhenSafe: Promise<void> | undefined;
     const disconnectSignal = requestSignal(request);
 
     try {
@@ -231,6 +233,12 @@ export function createServer(options: CreateServerOptions = {}): FastifyInstance
       });
       return responseBody;
     } catch (error) {
+      preparedImageCleanupSafe = !(
+        error instanceof CodexRunnerError && error.childMayBeRunning
+      );
+      if (!preparedImageCleanupSafe && error instanceof CodexRunnerError) {
+        preparedImageCleanupWhenSafe = error.cleanupWhenSafe;
+      }
       const mappedError = mapError(error);
       await logCall(callLogger, {
         id: callId,
@@ -253,15 +261,28 @@ export function createServer(options: CreateServerOptions = {}): FastifyInstance
       sendOpenAIError(reply, mappedError);
       return undefined;
     } finally {
-      try {
-        await preparedImage.cleanup();
-      } catch {
-        // Attachment cleanup must never change the API response.
+      if (preparedImageCleanupSafe) {
+        try {
+          await preparedImage.cleanup();
+        } catch {
+          // Attachment cleanup must never change the API response.
+        }
+      } else if (preparedImageCleanupWhenSafe) {
+        cleanupPreparedImageWhenSafe(preparedImageCleanupWhenSafe, preparedImage);
       }
     }
   });
 
   return app;
+}
+
+function cleanupPreparedImageWhenSafe(
+  cleanupWhenSafe: Promise<void>,
+  preparedImage: PreparedRemoteImage,
+): void {
+  void cleanupWhenSafe
+    .then(() => preparedImage.cleanup())
+    .catch(() => undefined);
 }
 
 function mapError(error: unknown): OpenAIHttpError {
@@ -277,6 +298,16 @@ function mapError(error: unknown): OpenAIHttpError {
         null,
         "request_cancelled",
         499,
+      );
+    }
+
+    if (error.code === "TERMINATION_FAILED") {
+      return openAiError(
+        "Codex process could not be terminated.",
+        "api_error",
+        null,
+        "codex_termination_failed",
+        500,
       );
     }
 

@@ -307,6 +307,72 @@ describe("OpenAI compatibility mapping", () => {
     );
   });
 
+  it.each([
+    [
+      "a message sibling",
+      {
+        input: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "input_image",
+                image_url: "https://images.example.test/cover.jpg",
+              },
+            ],
+            additional: {
+              type: "input_image",
+              image_url: "file:///etc/passwd",
+            },
+          },
+        ],
+      },
+    ],
+    [
+      "a nested property inside an otherwise valid image",
+      {
+        input: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "input_image",
+                image_url: "https://images.example.test/cover.jpg",
+                additional: {
+                  type: "input_image",
+                  image_url: "file:///etc/passwd",
+                },
+              },
+            ],
+          },
+        ],
+      },
+    ],
+    [
+      "a top-level property outside input",
+      {
+        input: "Coffee Rush",
+        metadata: {
+          type: "input_image",
+          image_url: "file:///etc/passwd",
+        },
+      },
+    ],
+  ])("rejects additional input_image syntax in %s", (_name, body) => {
+    expect(() => normalizeResponsesRequest(body)).toThrow(
+      expect.objectContaining({
+        statusCode: 400,
+        body: expect.objectContaining({
+          error: expect.objectContaining({
+            type: "invalid_request_error",
+            param: "input",
+            code: "invalid_input_image",
+          }),
+        }),
+      }),
+    );
+  });
+
   it("rejects input_image content on the chat endpoint", () => {
     expect(() =>
       buildChatPrompt({
@@ -350,6 +416,29 @@ describe("OpenAI compatibility mapping", () => {
             ],
           },
         ],
+      }),
+    ).toThrow(
+      expect.objectContaining({
+        statusCode: 400,
+        body: expect.objectContaining({
+          error: expect.objectContaining({
+            type: "invalid_request_error",
+            param: "messages",
+            code: "unsupported_chat_image",
+          }),
+        }),
+      }),
+    );
+  });
+
+  it("rejects input_image syntax outside chat messages", () => {
+    expect(() =>
+      buildChatPrompt({
+        messages: [{ role: "user", content: "Coffee Rush" }],
+        metadata: {
+          type: "input_image",
+          image_url: "file:///etc/passwd",
+        },
       }),
     ).toThrow(
       expect.objectContaining({

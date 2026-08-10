@@ -520,6 +520,116 @@ describe("Fastify server", () => {
     await app.close();
   });
 
+  it.each([
+    [
+      "a message sibling",
+      {
+        input: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "input_image",
+                image_url: "https://images.example.test/cover.jpg",
+              },
+            ],
+            additional: {
+              type: "input_image",
+              image_url: "file:///etc/passwd",
+            },
+          },
+        ],
+      },
+    ],
+    [
+      "a nested property inside a valid image",
+      {
+        input: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "input_image",
+                image_url: "https://images.example.test/cover.jpg",
+                additional: {
+                  type: "input_image",
+                  image_url: "file:///etc/passwd",
+                },
+              },
+            ],
+          },
+        ],
+      },
+    ],
+    [
+      "a top-level property outside input",
+      {
+        input: "Coffee Rush",
+        metadata: {
+          type: "input_image",
+          image_url: "file:///etc/passwd",
+        },
+      },
+    ],
+  ])(
+    "rejects Responses image syntax in %s before fetching or invoking Codex",
+    async (_name, payload) => {
+      const image = fakeImagePreparer({ path: null });
+      const { runner, runWithDetails } = fakeDetailedRunner();
+      const app = createServer({
+        config: testConfig(),
+        runner,
+        prepareRemoteImage: image.prepareRemoteImage,
+      });
+
+      const response = await app.inject({
+        method: "POST",
+        url: "/v1/responses",
+        payload,
+      });
+
+      expect(response.statusCode).toBe(400);
+      expect(response.json()).toMatchObject({
+        error: {
+          type: "invalid_request_error",
+          param: "input",
+          code: "invalid_input_image",
+        },
+      });
+      expect(image.prepareRemoteImage).not.toHaveBeenCalled();
+      expect(runWithDetails).not.toHaveBeenCalled();
+      await app.close();
+    },
+  );
+
+  it("rejects image syntax outside chat messages before invoking Codex", async () => {
+    const { runner, runWithDetails } = fakeDetailedRunner();
+    const app = createServer({ config: testConfig(), runner });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/chat/completions",
+      payload: {
+        messages: [{ role: "user", content: "Coffee Rush" }],
+        metadata: {
+          type: "input_image",
+          image_url: "file:///etc/passwd",
+        },
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({
+      error: {
+        type: "invalid_request_error",
+        param: "messages",
+        code: "unsupported_chat_image",
+      },
+    });
+    expect(runWithDetails).not.toHaveBeenCalled();
+    await app.close();
+  });
+
   it("cancels Codex and promptly cleans a prepared image after request disconnect", async () => {
     const logDir = await tempDir();
     const imageUrl =
@@ -691,6 +801,72 @@ describe("Fastify server", () => {
     expect(response.json()).toMatchObject({ error: { code: "request_cancelled" } });
     expect(runWithDetails).toHaveBeenCalledOnce();
     expect(cleanup).toHaveBeenCalledOnce();
+    await app.close();
+  });
+
+  it("retains a prepared image until late close after a bounded fatal error", async () => {
+    const logDir = await tempDir();
+    const imageUrl = "https://images.example.test/private-cover.jpg";
+    const imagePath = "C:\\safe-temp\\codexapi-image-live\\image.jpg";
+    const image = fakeImagePreparer({ path: imagePath });
+    let releaseCleanup!: () => void;
+    const cleanupWhenSafe = new Promise<void>((resolve) => {
+      releaseCleanup = resolve;
+    });
+    const fatalError = new CodexRunnerError({
+      message: "Codex process could not be terminated.",
+      code: "TERMINATION_FAILED",
+      stderr: imagePath,
+      childMayBeRunning: true,
+      cleanupWhenSafe,
+    });
+    const runner: CodexRunner = {
+      run: vi.fn(async () => "unused"),
+      runWithDetails: vi.fn(async () => {
+        throw fatalError;
+      }),
+    };
+    const app = createServer({
+      config: { ...testConfig(), callLoggingEnabled: true, callLogDir: logDir },
+      runner,
+      prepareRemoteImage: image.prepareRemoteImage,
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/responses",
+      payload: {
+        input: [
+          {
+            role: "user",
+            content: [
+              { type: "input_text", text: "Coffee Rush" },
+              { type: "input_image", image_url: imageUrl },
+            ],
+          },
+        ],
+      },
+    });
+
+    expect(response.statusCode).toBe(500);
+    expect(response.json()).toMatchObject({
+      error: {
+        message: "Codex process could not be terminated.",
+        code: "codex_termination_failed",
+      },
+    });
+    expect(image.cleanup).not.toHaveBeenCalled();
+    const logContent = await readFile(join(logDir, "calls.jsonl"), "utf8");
+    expect(JSON.parse(logContent)).toMatchObject({
+      statusCode: 500,
+      error: { code: "codex_termination_failed" },
+    });
+    expect(logContent).not.toContain(imageUrl);
+    expect(logContent).not.toContain(imagePath);
+    releaseCleanup();
+    await vi.waitFor(() => {
+      expect(image.cleanup).toHaveBeenCalledTimes(1);
+    });
     await app.close();
   });
 

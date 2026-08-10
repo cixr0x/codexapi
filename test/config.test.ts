@@ -27,29 +27,102 @@ function loadTestConfig(
   );
 }
 
+function nativeCodexTarget(): {
+  packageName: string;
+  triple: string;
+  suffix: string;
+} {
+  const key = `${process.platform}-${process.arch}`;
+  const targets: Record<
+    string,
+    { packageName: string; triple: string; suffix: string }
+  > = {
+    "linux-x64": {
+      packageName: "@openai/codex-linux-x64",
+      triple: "x86_64-unknown-linux-musl",
+      suffix: "linux-x64",
+    },
+    "linux-arm64": {
+      packageName: "@openai/codex-linux-arm64",
+      triple: "aarch64-unknown-linux-musl",
+      suffix: "linux-arm64",
+    },
+    "darwin-x64": {
+      packageName: "@openai/codex-darwin-x64",
+      triple: "x86_64-apple-darwin",
+      suffix: "darwin-x64",
+    },
+    "darwin-arm64": {
+      packageName: "@openai/codex-darwin-arm64",
+      triple: "aarch64-apple-darwin",
+      suffix: "darwin-arm64",
+    },
+    "win32-x64": {
+      packageName: "@openai/codex-win32-x64",
+      triple: "x86_64-pc-windows-msvc",
+      suffix: "win32-x64",
+    },
+    "win32-arm64": {
+      packageName: "@openai/codex-win32-arm64",
+      triple: "aarch64-pc-windows-msvc",
+      suffix: "win32-arm64",
+    },
+  };
+  const target = targets[key];
+  if (!target) {
+    throw new Error(`Unsupported test platform: ${key}`);
+  }
+  return target;
+}
+
 describe("config", () => {
-  it("resolves the exact pinned local Codex package under absolute Node", () => {
+  it("resolves the exact pinned package-local platform-native Codex executable", () => {
     const resolved = defaultCodexCommand();
-    const expectedPackageRoot = dirname(
+    const mainPackageRoot = dirname(
       realpathSync.native(
         createRequire(import.meta.url).resolve("@openai/codex/package.json"),
       ),
     );
+    const target = nativeCodexTarget();
+    const nativePackageRoot = dirname(
+      realpathSync.native(
+        createRequire(import.meta.url).resolve(`${target.packageName}/package.json`),
+      ),
+    );
+    const expectedExecutable = realpathSync.native(
+      join(
+        nativePackageRoot,
+        "vendor",
+        target.triple,
+        "bin",
+        process.platform === "win32" ? "codex.exe" : "codex",
+      ),
+    );
 
-    expect(resolved.command).toBe(realpathSync.native(process.execPath));
+    expect(resolved.command).toBe(expectedExecutable);
     expect(isAbsolute(resolved.command)).toBe(true);
-    expect(resolved.args).toHaveLength(1);
+    expect(relative(nativePackageRoot, resolved.command)).not.toMatch(
+      /^\.\.(?:[\\/]|$)/,
+    );
+    expect(resolved.args).toEqual([]);
 
-    const scriptPath = resolved.args[0];
-    expect(isAbsolute(scriptPath)).toBe(true);
-    const packageRoot = dirname(dirname(scriptPath));
-    expect(packageRoot).toBe(expectedPackageRoot);
-    expect(relative(packageRoot, scriptPath)).not.toMatch(/^\.\.(?:[\\/]|$)/);
-    expect(scriptPath).toBe(join(packageRoot, "bin", "codex.js"));
-    const packageJson = JSON.parse(
-      readFileSync(join(packageRoot, "package.json"), "utf8"),
-    ) as { version?: string };
-    expect(packageJson.version).toBe("0.144.1");
+    const mainPackageJson = JSON.parse(
+      readFileSync(join(mainPackageRoot, "package.json"), "utf8"),
+    ) as {
+      version?: string;
+      optionalDependencies?: Record<string, string>;
+    };
+    const nativePackageJson = JSON.parse(
+      readFileSync(join(nativePackageRoot, "package.json"), "utf8"),
+    ) as { name?: string; version?: string };
+    expect(mainPackageJson.version).toBe("0.144.1");
+    expect(mainPackageJson.optionalDependencies?.[target.packageName]).toBe(
+      `npm:@openai/codex@0.144.1-${target.suffix}`,
+    );
+    expect(nativePackageJson).toMatchObject({
+      name: "@openai/codex",
+      version: `0.144.1-${target.suffix}`,
+    });
   });
 
   it("ignores Windows APPDATA and executable wrapper inputs", () => {

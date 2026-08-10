@@ -37,6 +37,12 @@ export interface CodexCommandDefault {
 const PINNED_CODEX_VERSION = "0.144.1";
 const requireFromHere = createRequire(import.meta.url);
 
+interface NativeCodexTarget {
+  packageName: string;
+  targetTriple: string;
+  versionSuffix: string;
+}
+
 export function loadConfig(
   env: NodeJS.ProcessEnv = process.env,
   cwd = process.cwd(),
@@ -72,32 +78,118 @@ export function defaultCodexCommand(): CodexCommandDefault {
   const packageJsonPath = realpathSync.native(
     requireFromHere.resolve("@openai/codex/package.json"),
   );
-  const packageRoot = dirname(packageJsonPath);
   const metadata = JSON.parse(readFileSync(packageJsonPath, "utf8")) as {
+    name?: string;
     version?: string;
+    optionalDependencies?: Record<string, string>;
   };
-  if (metadata.version !== PINNED_CODEX_VERSION) {
+  if (
+    metadata.name !== "@openai/codex" ||
+    metadata.version !== PINNED_CODEX_VERSION
+  ) {
     throw new Error(
       `Installed @openai/codex version must be exactly ${PINNED_CODEX_VERSION}.`,
     );
   }
 
-  const scriptPath = realpathSync.native(join(packageRoot, "bin", "codex.js"));
-  const scriptRelation = relative(packageRoot, scriptPath);
+  const target = nativeCodexTarget(process.platform, process.arch);
+  const expectedDependency =
+    `npm:@openai/codex@${PINNED_CODEX_VERSION}-${target.versionSuffix}`;
+  if (metadata.optionalDependencies?.[target.packageName] !== expectedDependency) {
+    throw new Error("Pinned Codex package has an unexpected native dependency.");
+  }
+
+  const requireFromPinnedPackage = createRequire(packageJsonPath);
+  const nativePackageJsonPath = realpathSync.native(
+    requireFromPinnedPackage.resolve(`${target.packageName}/package.json`),
+  );
+  const nativePackageRoot = dirname(nativePackageJsonPath);
+  const nativeMetadata = JSON.parse(
+    readFileSync(nativePackageJsonPath, "utf8"),
+  ) as { name?: string; version?: string };
   if (
-    !isAbsolute(scriptPath) ||
-    /^\.\.(?:[\\/]|$)/.test(scriptRelation) ||
-    isAbsolute(scriptRelation)
+    nativeMetadata.name !== "@openai/codex" ||
+    nativeMetadata.version !==
+      `${PINNED_CODEX_VERSION}-${target.versionSuffix}`
   ) {
-    throw new Error("Resolved Codex script must stay inside the pinned package.");
+    throw new Error("Installed platform-native Codex package has an unexpected version.");
   }
 
-  const command = realpathSync.native(process.execPath);
-  if (!isAbsolute(command)) {
-    throw new Error("Node executable path must be absolute.");
-  }
+  const command = realpathSync.native(
+    join(
+      nativePackageRoot,
+      "vendor",
+      target.targetTriple,
+      "bin",
+      process.platform === "win32" ? "codex.exe" : "codex",
+    ),
+  );
+  assertContainedAbsolutePath(
+    nativePackageRoot,
+    command,
+    "Resolved Codex executable must stay inside the pinned native package.",
+  );
 
-  return { command, args: [scriptPath] };
+  return { command, args: [] };
+}
+
+function nativeCodexTarget(
+  platform: NodeJS.Platform,
+  arch: string,
+): NativeCodexTarget {
+  const target = NATIVE_CODEX_TARGETS[`${platform}-${arch}`];
+  if (!target) {
+    throw new Error(`Unsupported Codex platform: ${platform}-${arch}.`);
+  }
+  return target;
+}
+
+const NATIVE_CODEX_TARGETS: Readonly<Record<string, NativeCodexTarget>> = {
+  "linux-x64": {
+    packageName: "@openai/codex-linux-x64",
+    targetTriple: "x86_64-unknown-linux-musl",
+    versionSuffix: "linux-x64",
+  },
+  "linux-arm64": {
+    packageName: "@openai/codex-linux-arm64",
+    targetTriple: "aarch64-unknown-linux-musl",
+    versionSuffix: "linux-arm64",
+  },
+  "darwin-x64": {
+    packageName: "@openai/codex-darwin-x64",
+    targetTriple: "x86_64-apple-darwin",
+    versionSuffix: "darwin-x64",
+  },
+  "darwin-arm64": {
+    packageName: "@openai/codex-darwin-arm64",
+    targetTriple: "aarch64-apple-darwin",
+    versionSuffix: "darwin-arm64",
+  },
+  "win32-x64": {
+    packageName: "@openai/codex-win32-x64",
+    targetTriple: "x86_64-pc-windows-msvc",
+    versionSuffix: "win32-x64",
+  },
+  "win32-arm64": {
+    packageName: "@openai/codex-win32-arm64",
+    targetTriple: "aarch64-pc-windows-msvc",
+    versionSuffix: "win32-arm64",
+  },
+};
+
+function assertContainedAbsolutePath(
+  root: string,
+  candidate: string,
+  message: string,
+): void {
+  const relation = relative(root, candidate);
+  if (
+    !isAbsolute(candidate) ||
+    /^\.\.(?:[\\/]|$)/.test(relation) ||
+    isAbsolute(relation)
+  ) {
+    throw new Error(message);
+  }
 }
 
 function parseInteger(

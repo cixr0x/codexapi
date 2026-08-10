@@ -58,6 +58,7 @@ export function openAiError(
 
 export function buildChatPrompt(body: unknown): string {
   const request = requireRecord(body, "Request body must be a JSON object.");
+  rejectChatImageContent(request);
   rejectStreaming(request);
   rejectChatTools(request);
 
@@ -87,7 +88,6 @@ export function buildChatPrompt(body: unknown): string {
       );
     }
 
-    rejectChatImageContent(record.content);
     return `${role}: ${formatContent(record.content)}`;
   });
 
@@ -107,6 +107,7 @@ export interface NormalizedResponsesRequest {
 
 export function normalizeResponsesRequest(body: unknown): NormalizedResponsesRequest {
   const request = requireRecord(body, "Request body must be a JSON object.");
+  const inputImage = validateResponsesInputImage(request);
   rejectStreaming(request);
   const webSearch = parseWebSearch(request);
 
@@ -124,7 +125,7 @@ export function normalizeResponsesRequest(body: unknown): NormalizedResponsesReq
     lines.push(`instructions: ${request.instructions}`);
   }
 
-  const formattedInput = formatResponseInput(request.input);
+  const formattedInput = formatResponseInput(request.input, inputImage);
   lines.push(...formattedInput.lines);
   const format = getResponseTextFormat(request);
   if (format) {
@@ -315,7 +316,10 @@ function parseWebSearch(body: JsonRecord): boolean {
   return true;
 }
 
-function formatResponseInput(input: unknown): {
+function formatResponseInput(
+  input: unknown,
+  inputImage: InputImagePart | null,
+): {
   lines: string[];
   imageUrl: string | null;
 } {
@@ -324,13 +328,9 @@ function formatResponseInput(input: unknown): {
   }
 
   if (!Array.isArray(input)) {
-    if (containsInputImageSyntax(input)) {
-      throw invalidInputImageError();
-    }
     return { lines: [`input: ${formatContent(input)}`], imageUrl: null };
   }
 
-  let imageUrl: string | null = null;
   const lines = input.map((item, index) => {
     if (typeof item === "string") {
       return `input: ${item}`;
@@ -341,56 +341,37 @@ function formatResponseInput(input: unknown): {
       `input[${index}] must be a string or JSON object.`,
       "input",
     );
-    if (!Array.isArray(record.content) && containsInputImageSyntax(record)) {
-      throw invalidInputImageError();
-    }
     const rawContent = record.content ?? record.text ?? record;
     const content = Array.isArray(record.content)
-      ? record.content.map((part) => formatResponseContentPart(part, () => imageUrl, (url) => {
-          imageUrl = url;
-        })).filter(Boolean).join("\n")
+      ? record.content
+          .map((part) => formatResponseContentPart(part, inputImage))
+          .filter(Boolean)
+          .join("\n")
       : formatContent(rawContent);
     return typeof record.role === "string" && record.role !== ""
       ? `${record.role}: ${content}`
       : content;
   });
 
-  return { lines, imageUrl };
+  return {
+    lines,
+    imageUrl: inputImage === null ? null : (inputImage.image_url as string),
+  };
 }
 
 function formatResponseContentPart(
   part: unknown,
-  currentImageUrl: () => string | null,
-  setImageUrl: (url: string) => void,
+  inputImage: InputImagePart | null,
 ): string {
-  if (!isInputImagePart(part)) {
-    if (containsInputImageSyntax(part)) {
-      throw invalidInputImageError();
-    }
+  if (inputImage === null || part !== inputImage) {
     return formatContentPart(part);
   }
 
-  if (
-    typeof part.image_url !== "string" ||
-    Object.prototype.hasOwnProperty.call(part, "file_id")
-  ) {
-    throw invalidInputImageError();
-  }
-  if (currentImageUrl() !== null) {
-    throw openAiError(
-      "Responses requests support at most one input_image.",
-      "invalid_request_error",
-      "input",
-      "multiple_input_images",
-    );
-  }
-
-  setImageUrl(part.image_url);
-  return `[store cover attached when available]\nimage_url: ${part.image_url}`;
+  return `[store cover attached when available]\nimage_url: ${inputImage.image_url as string}`;
 }
 
 function rejectChatImageContent(content: unknown): void {
-  if (containsInputImageSyntax(content)) {
+  if (findInputImageOccurrences(content).length > 0) {
     throw openAiError(
       "Chat completion image inputs are not supported.",
       "invalid_request_error",
@@ -413,14 +394,67 @@ function isInputImagePart(value: unknown): value is InputImagePart {
   return isRecord(value) && value.type === "input_image";
 }
 
-function containsInputImageSyntax(value: unknown): boolean {
+function validateResponsesInputImage(request: JsonRecord): InputImagePart | null {
+  const occurrences = findInputImageOccurrences(request);
+  const directParts = directResponsesInputImages(request.input);
+
+  if (directParts.length > 1) {
+    throw openAiError(
+      "Responses requests support at most one input_image.",
+      "invalid_request_error",
+      "input",
+      "multiple_input_images",
+    );
+  }
+  if (occurrences.length === 0) {
+    return null;
+  }
+  if (
+    occurrences.length !== 1 ||
+    directParts.length !== 1 ||
+    occurrences[0] !== directParts[0]
+  ) {
+    throw invalidInputImageError();
+  }
+
+  const inputImage = directParts[0]!;
+  if (
+    typeof inputImage.image_url !== "string" ||
+    Object.prototype.hasOwnProperty.call(inputImage, "file_id")
+  ) {
+    throw invalidInputImageError();
+  }
+  return inputImage;
+}
+
+function directResponsesInputImages(input: unknown): InputImagePart[] {
+  if (!Array.isArray(input)) {
+    return [];
+  }
+
+  const images: InputImagePart[] = [];
+  for (const item of input) {
+    if (!isRecord(item) || !Array.isArray(item.content)) {
+      continue;
+    }
+    for (const part of item.content) {
+      if (isInputImagePart(part)) {
+        images.push(part);
+      }
+    }
+  }
+  return images;
+}
+
+function findInputImageOccurrences(value: unknown): InputImagePart[] {
   const pending: unknown[] = [value];
   const visited = new Set<object>();
+  const occurrences: InputImagePart[] = [];
 
   while (pending.length > 0) {
     const current = pending.pop();
     if (isInputImagePart(current)) {
-      return true;
+      occurrences.push(current);
     }
     if (typeof current !== "object" || current === null || visited.has(current)) {
       continue;
@@ -429,7 +463,7 @@ function containsInputImageSyntax(value: unknown): boolean {
     pending.push(...(Array.isArray(current) ? current : Object.values(current)));
   }
 
-  return false;
+  return occurrences;
 }
 
 function formatContent(content: unknown): string {
