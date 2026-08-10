@@ -35,6 +35,8 @@ export interface CodexCommandDefault {
 }
 
 const PINNED_CODEX_VERSION = "0.144.1";
+export const CODEXAPI_FIXED_HOST = "127.0.0.1";
+export const CODEXAPI_FIXED_PORT = 3001;
 const requireFromHere = createRequire(import.meta.url);
 
 interface NativeCodexTarget {
@@ -49,8 +51,8 @@ export function loadConfig(
   platform = process.platform,
 ): AppConfig {
   const config: AppConfig = {
-    host: env.HOST ?? "127.0.0.1",
-    port: parseInteger(env.PORT, 3001, "PORT"),
+    host: env.HOST ?? CODEXAPI_FIXED_HOST,
+    port: parseFixedPort(env.PORT),
     codexBackend: parseCodexBackend(env.CODEX_BACKEND),
     codexWorkspace: env.CODEX_WORKSPACE ?? "",
     codexHome: env.CODEX_HOME ?? "",
@@ -70,6 +72,7 @@ export function loadConfig(
     callLogDir: env.CODEX_CALL_LOG_DIR ?? join(cwd, ".codexapi", "logs"),
   };
 
+  assertFixedListenerConfig(config);
   assertSafeExecutionConfig(config);
   return config;
 }
@@ -131,6 +134,17 @@ export function defaultCodexCommand(): CodexCommandDefault {
   );
 
   return { command, args: [] };
+}
+
+export function assertFixedListenerConfig(
+  config: Pick<AppConfig, "host" | "port">,
+): void {
+  if (config.host !== CODEXAPI_FIXED_HOST) {
+    throw new Error(`HOST must be exactly ${CODEXAPI_FIXED_HOST}.`);
+  }
+  if (!Number.isInteger(config.port) || config.port !== CODEXAPI_FIXED_PORT) {
+    throw new Error(`PORT must be exactly ${CODEXAPI_FIXED_PORT}.`);
+  }
 }
 
 function nativeCodexTarget(
@@ -247,6 +261,16 @@ function parseCodexBackend(value: string | undefined): CodexBackend {
   }
 
   throw new Error("CODEX_BACKEND only supports exec.");
+}
+
+function parseFixedPort(value: string | undefined): number {
+  if (value == null || value === "") {
+    return CODEXAPI_FIXED_PORT;
+  }
+  if (value !== String(CODEXAPI_FIXED_PORT)) {
+    throw new Error(`PORT must be exactly ${CODEXAPI_FIXED_PORT}.`);
+  }
+  return CODEXAPI_FIXED_PORT;
 }
 
 function parseCodexReasoningEffort(value: string | undefined): CodexReasoningEffort {

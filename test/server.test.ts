@@ -126,6 +126,25 @@ describe("Fastify server", () => {
     expect(listen).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["host", { host: "0.0.0.0" }, "HOST must be exactly 127.0.0.1."],
+    ["port", { port: 3000 }, "PORT must be exactly 3001."],
+  ])("rejects direct non-fixed %s before probing or listening", async (_name, override, message) => {
+    const { runner } = fakeRunner();
+    const spawn = vi.fn();
+    const listen = vi.fn();
+    const config = {
+      ...testConfig(),
+      codexWorkspace: await tempDir(),
+      codexHome: await tempDir(),
+      ...override,
+    };
+
+    await expect(startServer({ config, runner, spawn, listen })).rejects.toThrow(message);
+    expect(spawn).not.toHaveBeenCalled();
+    expect(listen).not.toHaveBeenCalled();
+  });
+
   it("attests Codex capabilities before binding the startup listener", async () => {
     const events: string[] = [];
     const child = new EventEmitter() as EventEmitter & {

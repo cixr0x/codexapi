@@ -27,8 +27,8 @@ Copy `.env.example` and set the two dedicated paths. The service accepts only th
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `HOST` | `127.0.0.1` | Must remain loopback |
-| `PORT` | `3001` | Fixed local API port |
+| `HOST` | `127.0.0.1` | Fixed and enforced loopback bind host |
+| `PORT` | `3001` | Fixed and enforced local API port |
 | `CODEX_HOME` | required | Dedicated Codex home and authentication boundary |
 | `CODEX_WORKSPACE` | required | Empty dedicated inference directory |
 | `CODEX_TIMEOUT_MS` | `120000` | Per-request Codex timeout |

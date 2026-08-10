@@ -170,6 +170,24 @@ describe("config", () => {
     expect(loadTestConfig({}, "C:/repo", "linux").port).toBe(3001);
   });
 
+  it.each(["localhost", "0.0.0.0", "::1", "127.0.0.2"])(
+    "rejects non-loopback HOST %s",
+    (host) => {
+      expect(() => loadTestConfig({ HOST: host }, "C:/repo", "linux")).toThrow(
+        "HOST must be exactly 127.0.0.1.",
+      );
+    },
+  );
+
+  it.each(["3000", "3002", "03001", "3001.0"])(
+    "rejects non-fixed PORT %s",
+    (port) => {
+      expect(() => loadTestConfig({ PORT: port }, "C:/repo", "linux")).toThrow(
+        "PORT must be exactly 3001.",
+      );
+    },
+  );
+
   it("requires an explicit dedicated Codex home", () => {
     expect(() =>
       loadConfig({ CODEX_WORKSPACE: SAFE_WORKSPACE }, process.cwd(), process.platform),

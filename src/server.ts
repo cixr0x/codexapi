@@ -11,6 +11,7 @@ import { createCallLogger, type CallLogger, type CallLogEntry } from "./callLogg
 import {
   CODEX_REASONING_EFFORTS,
   type AppConfig,
+  assertFixedListenerConfig,
   defaultCodexCommand,
   isCodexReasoningEffort,
   loadConfig,
@@ -572,6 +573,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 export async function startServer(options: StartServerOptions = {}): Promise<FastifyInstance> {
   const config = options.config ?? loadConfig();
+  assertFixedListenerConfig(config);
   assertSafeExecutionConfig(config);
   const capabilityReport = await assertCodexCapabilities(config, options.spawn);
   const app = createServer({ ...options, config, capabilityReport });

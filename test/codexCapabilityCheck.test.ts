@@ -11,6 +11,14 @@ class FakeChildProcess extends EventEmitter {
   stdout = new FakeReadable();
   stderr = new FakeReadable();
   kill = vi.fn();
+
+  close(code: number | null): void {
+    this.emit("close", code, null);
+  }
+
+  exit(code: number | null): void {
+    this.emit("exit", code, null);
+  }
 }
 
 interface ProbeResult {
@@ -50,6 +58,20 @@ function createProbeSpawn(results: ProbeResult[]): ProbeSpawn {
       });
     }
 
+    return child as never;
+  }) as unknown as ProbeSpawn;
+  spawn.calls = calls;
+  return spawn;
+}
+
+function createManualProbeSpawn(child: FakeChildProcess): ProbeSpawn {
+  const calls: ProbeSpawn["calls"] = [];
+  const spawn = ((
+    command: string,
+    args: string[],
+    options: Parameters<SpawnFn>[2],
+  ) => {
+    calls.push([command, args, options]);
     return child as never;
   }) as unknown as ProbeSpawn;
   spawn.calls = calls;
@@ -114,6 +136,22 @@ describe("Codex capability startup check", () => {
     expect(spawn.calls).toHaveLength(1);
   });
 
+  it.each([
+    "codex-cli 0.144.1 extra\n",
+    "codex-cli 0.144.1-beta\n",
+    "codex-cli 0.144.1\ncodex-cli 0.144.1\n",
+    "codex-cli 999999999999999999999.144.1\n",
+    "codex-cli 01.144.1\n",
+    "Codex-cli 0.144.1\n",
+  ])("rejects malformed complete version output %j", async (versionOutput) => {
+    const spawn = createProbeSpawn([{ stdout: versionOutput }]);
+
+    await expect(assertCodexCapabilities(testConfig(), spawn)).rejects.toThrow(
+      /version output was not recognized/i,
+    );
+    expect(spawn.calls).toHaveLength(1);
+  });
+
   it("rejects a nonzero version probe", async () => {
     const spawn = createProbeSpawn([{ code: 1, stderr: "bad executable" }]);
 
@@ -134,6 +172,23 @@ describe("Codex capability startup check", () => {
     await expect(assertCodexCapabilities(testConfig(), spawn)).rejects.toThrow(message);
   });
 
+  it.each([
+    "shell_tool stable false trailing\n",
+    "shell_tool removed false\n",
+    "shell_tool stable false\nshell_tool experimental false\n",
+    "shell_tool stable false\nshell_tool stable false\n",
+    "shell_tool stable maybe\n",
+  ])("rejects malformed or ambiguous shell_tool output %j", async (featureOutput) => {
+    const spawn = createProbeSpawn([
+      { stdout: "codex-cli 0.144.1\n" },
+      { stdout: featureOutput },
+    ]);
+
+    await expect(assertCodexCapabilities(testConfig(), spawn)).rejects.toThrow(
+      /shell_tool feature is incompatible/i,
+    );
+  });
+
   it("rejects a nonempty MCP inventory", async () => {
     const spawn = createProbeSpawn([
       { stdout: "codex-cli 0.144.1\n" },
@@ -146,11 +201,91 @@ describe("Codex capability startup check", () => {
     );
   });
 
-  it("times out a probe that does not exit", async () => {
-    const spawn = createProbeSpawn([{ neverClose: true }]);
+  it("waits for close after SIGTERM and ignores exit before close", async () => {
+    vi.useFakeTimers();
+    const child = new FakeChildProcess();
+    const result = assertCodexCapabilities(testConfig(1), createManualProbeSpawn(child));
+    let settled = false;
+    void result.finally(() => {
+      settled = true;
+    }).catch(() => undefined);
 
-    await expect(assertCodexCapabilities(testConfig(10), spawn)).rejects.toThrow(
-      /timed out/i,
-    );
+    try {
+      await vi.advanceTimersByTimeAsync(1);
+      expect(child.kill).toHaveBeenCalledExactlyOnceWith("SIGTERM");
+      expect(settled).toBe(false);
+
+      child.exit(null);
+      await Promise.resolve();
+      expect(settled).toBe(false);
+
+      child.close(null);
+      await expect(result).rejects.toMatchObject({ code: "TIMEOUT" });
+      expect(vi.getTimerCount()).toBe(0);
+      expect(child.eventNames()).toEqual([]);
+      expect(child.stdout.eventNames()).toEqual([]);
+      expect(child.stderr.eventNames()).toEqual([]);
+    } finally {
+      child.close(null);
+      await result.catch(() => undefined);
+      vi.useRealTimers();
+    }
+  });
+
+  it("force-kills an ignored SIGTERM and still waits for close", async () => {
+    vi.useFakeTimers();
+    const child = new FakeChildProcess();
+    const result = assertCodexCapabilities(testConfig(1), createManualProbeSpawn(child));
+
+    try {
+      await vi.advanceTimersByTimeAsync(1);
+      expect(child.kill).toHaveBeenNthCalledWith(1, "SIGTERM");
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(child.kill).toHaveBeenNthCalledWith(2, "SIGKILL");
+
+      child.close(null);
+      await expect(result).rejects.toMatchObject({ code: "TIMEOUT" });
+      expect(vi.getTimerCount()).toBe(0);
+      expect(child.eventNames()).toEqual([]);
+      expect(child.stdout.eventNames()).toEqual([]);
+      expect(child.stderr.eventNames()).toEqual([]);
+    } finally {
+      child.close(null);
+      await result.catch(() => undefined);
+      vi.useRealTimers();
+    }
+  });
+
+  it("returns a bounded fatal error and reaps a child when SIGKILL is not verified", async () => {
+    vi.useFakeTimers();
+    const child = new FakeChildProcess();
+    child.kill.mockReturnValue(false);
+    const result = assertCodexCapabilities(testConfig(1), createManualProbeSpawn(child));
+    const fatalResult = result.catch((error: unknown) => error);
+
+    try {
+      await vi.advanceTimersByTimeAsync(1);
+      await vi.advanceTimersByTimeAsync(1_000);
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      await expect(fatalResult).resolves.toMatchObject({
+        code: "TERMINATION_FAILED",
+        childMayBeRunning: true,
+      });
+      expect(child.kill.mock.calls).toEqual([["SIGTERM"], ["SIGKILL"]]);
+      expect(child.listenerCount("close")).toBe(1);
+      expect(child.listenerCount("error")).toBe(1);
+      expect(child.stdout.eventNames()).toEqual([]);
+      expect(child.stderr.eventNames()).toEqual([]);
+
+      child.close(null);
+      await Promise.resolve();
+      expect(child.eventNames()).toEqual([]);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      child.close(null);
+      await fatalResult;
+      vi.useRealTimers();
+    }
   });
 });

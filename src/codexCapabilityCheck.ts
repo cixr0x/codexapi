@@ -7,6 +7,7 @@ import { CODEX_EXECUTION_POLICY } from "./executionPolicy.js";
 const MINIMUM_CODEX_VERSION = [0, 144, 1] as const;
 const MAX_PROBE_OUTPUT_BYTES = 64 * 1024;
 const MAX_PROBE_TIMEOUT_MS = 10_000;
+const PROBE_TERMINATION_GRACE_MS = 1_000;
 
 export const CODEX_CAPABILITY_POLICY_NAME = "codexapi-constrained-v1";
 
@@ -14,6 +15,26 @@ export interface CodexCapabilityReport {
   version: string;
   shellToolFeature: "stable" | "experimental";
   checked: true;
+}
+
+export class CodexCapabilityProbeError extends Error {
+  readonly code: "TIMEOUT" | "TERMINATION_FAILED";
+  readonly childMayBeRunning: boolean;
+
+  constructor({
+    message,
+    code,
+    childMayBeRunning = false,
+  }: {
+    message: string;
+    code: "TIMEOUT" | "TERMINATION_FAILED";
+    childMayBeRunning?: boolean;
+  }) {
+    super(message);
+    this.name = "CodexCapabilityProbeError";
+    this.code = code;
+    this.childMayBeRunning = childMayBeRunning;
+  }
 }
 
 export async function assertCodexCapabilities(
@@ -91,30 +112,12 @@ function runProbe(
     let stdout = "";
     let stderr = "";
     let settled = false;
-    let child: ChildProcess;
-    const timeout = setTimeout(() => {
-      settle(() => {
-        try {
-          child.kill("SIGTERM");
-        } catch {
-          // The bounded timeout remains authoritative if the child cannot be signaled.
-        }
-        reject(new Error(`Codex ${name} probe timed out after ${timeoutMs} ms.`));
-      });
-    }, timeoutMs);
-
-    try {
-      child = spawn(command, args, options);
-    } catch (error) {
-      settle(() => {
-        reject(
-          new Error(
-            `Codex ${name} probe could not start: ${error instanceof Error ? error.message : "unknown error"}.`,
-          ),
-        );
-      });
-      return;
-    }
+    let fatalSettlement = false;
+    let terminationGraceTimer: ReturnType<typeof setTimeout> | undefined;
+    let forceTerminationGraceTimer: ReturnType<typeof setTimeout> | undefined;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    let child: ChildProcess | undefined;
+    let terminating = false;
 
     const onStdout = (chunk: Buffer | string) => {
       stdout = appendBounded(stdout, chunk);
@@ -123,9 +126,29 @@ function runProbe(
       stderr = appendBounded(stderr, chunk);
     };
     const onError = (error: Error) => {
+      if (terminating) {
+        return;
+      }
       settle(() => reject(new Error(`Codex ${name} probe could not start: ${error.message}.`)));
     };
     const onClose = (code: number | null) => {
+      if (fatalSettlement) {
+        removeChildListeners();
+        return;
+      }
+
+      if (terminating) {
+        settle(() => {
+          reject(
+            new CodexCapabilityProbeError({
+              message: `Codex ${name} probe timed out after ${timeoutMs} ms.`,
+              code: "TIMEOUT",
+            }),
+          );
+        });
+        return;
+      }
+
       settle(() => {
         if (code !== 0) {
           reject(new Error(`Codex ${name} probe exited with code ${code ?? "unknown"}.`));
@@ -135,35 +158,113 @@ function runProbe(
       });
     };
 
+    const requestTermination = () => {
+      if (settled || terminating || !child) {
+        return;
+      }
+      terminating = true;
+      clearTimeout(timeout);
+      terminationGraceTimer = setTimeout(forceTerminate, PROBE_TERMINATION_GRACE_MS);
+      tryKill(child, "SIGTERM");
+    };
+    const forceTerminate = () => {
+      if (settled || !terminating || !child) {
+        return;
+      }
+      forceTerminationGraceTimer = setTimeout(
+        failUnverifiedTermination,
+        PROBE_TERMINATION_GRACE_MS,
+      );
+      tryKill(child, "SIGKILL");
+    };
+    const failUnverifiedTermination = () => {
+      if (settled || !terminating) {
+        return;
+      }
+      settle(
+        () => {
+          reject(
+            new CodexCapabilityProbeError({
+              message: `Codex ${name} probe could not be terminated.`,
+              code: "TERMINATION_FAILED",
+              childMayBeRunning: true,
+            }),
+          );
+        },
+        true,
+      );
+    };
+
+    try {
+      child = spawn(command, args, options);
+    } catch (error) {
+      reject(
+        new Error(
+          `Codex ${name} probe could not start: ${error instanceof Error ? error.message : "unknown error"}.`,
+        ),
+      );
+      return;
+    }
+
     child.stdout?.on("data", onStdout);
     child.stderr?.on("data", onStderr);
     child.on("error", onError);
     child.on("close", onClose);
+    timeout = setTimeout(requestTermination, timeoutMs);
 
-    function settle(action: () => void): void {
+    function settle(action: () => void, retainChildReaper = false): void {
       if (settled) {
         return;
       }
       settled = true;
+      fatalSettlement = retainChildReaper;
+      clearProbeLifecycle();
+      if (retainChildReaper) {
+        child?.stdout?.removeListener("data", onStdout);
+        child?.stderr?.removeListener("data", onStderr);
+      } else {
+        removeChildListeners();
+      }
+      action();
+    }
+
+    function clearProbeLifecycle(): void {
       clearTimeout(timeout);
+      if (terminationGraceTimer !== undefined) {
+        clearTimeout(terminationGraceTimer);
+      }
+      if (forceTerminationGraceTimer !== undefined) {
+        clearTimeout(forceTerminationGraceTimer);
+      }
+    }
+
+    function removeChildListeners(): void {
       child?.stdout?.removeListener("data", onStdout);
       child?.stderr?.removeListener("data", onStderr);
       child?.removeListener("error", onError);
       child?.removeListener("close", onClose);
-      action();
     }
   });
 }
 
 function parseCodexVersion(output: string): { text: string; parts: [number, number, number] } {
-  const match = /\bcodex-cli\s+(\d+)\.(\d+)\.(\d+)(?![-+])/i.exec(output);
+  const match = /^codex-cli ((?:0|[1-9]\d*))\.((?:0|[1-9]\d*))\.((?:0|[1-9]\d*))$/.exec(output);
   if (!match) {
+    throw new Error("Codex version output was not recognized.");
+  }
+
+  const parts: [number, number, number] = [
+    Number(match[1]),
+    Number(match[2]),
+    Number(match[3]),
+  ];
+  if (!parts.every((part) => Number.isSafeInteger(part) && part >= 0)) {
     throw new Error("Codex version output was not recognized.");
   }
 
   return {
     text: `${match[1]}.${match[2]}.${match[3]}`,
-    parts: [Number(match[1]), Number(match[2]), Number(match[3])],
+    parts,
   };
 }
 
@@ -180,20 +281,36 @@ function isMinimumVersion(version: { parts: [number, number, number] }): boolean
 }
 
 function parseShellToolFeature(output: string): "stable" | "experimental" {
-  const line = output
+  const rows = output
     .split(/\r?\n/)
     .map((candidate) => candidate.trim().split(/\s+/))
-    .find(([name]) => name === "shell_tool");
-  if (!line) {
+    .filter(([name]) => name === "shell_tool");
+  if (rows.length === 0) {
     throw new Error("Codex shell_tool feature was not reported.");
   }
+  if (rows.length !== 1) {
+    throw new Error("Codex shell_tool feature is incompatible with this policy.");
+  }
 
-  const feature = line[1];
-  if (feature === "stable" || feature === "experimental") {
+  const [name, feature, enabled] = rows[0]!;
+  if (
+    name === "shell_tool" &&
+    (feature === "stable" || feature === "experimental") &&
+    (enabled === "true" || enabled === "false") &&
+    rows[0]!.length === 3
+  ) {
     return feature;
   }
 
   throw new Error("Codex shell_tool feature is incompatible with this policy.");
+}
+
+function tryKill(child: ChildProcess, signal: NodeJS.Signals): void {
+  try {
+    child.kill(signal);
+  } catch {
+    // The bounded escalation path remains authoritative if a signal cannot be sent.
+  }
 }
 
 function assertEmptyMcpInventory(output: string): void {
