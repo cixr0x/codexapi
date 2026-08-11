@@ -82,14 +82,14 @@ function testConfig() {
     host: "127.0.0.1",
     port: 3001,
     codexBackend: "exec" as const,
-    codexWorkspace: "C:/workspace",
-    codexHome: "C:/codex-home",
+    codexWorkspace: join(tmpdir(), "codexapi-test-missing-workspace"),
+    codexHome: join(tmpdir(), "codexapi-test-missing-home"),
     codexTimeoutMs: 120000,
     codexDefaultModel: "gpt-5.4-mini",
     codexAllowedModels: ["gpt-5.4-mini", "gpt-5.5", "gpt-5.6-sol"],
     codexReasoningEffort: "medium" as const,
     callLoggingEnabled: false,
-    callLogDir: "C:/workspace/.codexapi/logs",
+    callLogDir: join(tmpdir(), "codexapi-test-missing-call-logs"),
   };
 }
 
