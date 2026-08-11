@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
-import { access, readFile, rm } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 
 import { describe, expect, it, vi } from "vitest";
 
@@ -12,13 +12,25 @@ import {
 } from "../src/codexRunner.js";
 import { defaultCodexCommand } from "../src/config.js";
 
+const TEST_REQUEST_WORKSPACE = "C:/request-workspace";
+const requestWorkspaceModule = vi.hoisted(() => ({
+  createRequestWorkspace: vi.fn(async () => ({
+    path: "C:/request-workspace",
+    cleanup: async () => undefined,
+  })),
+}));
+
+vi.mock("../src/requestWorkspace.js", () => requestWorkspaceModule);
+
 const SAFE_DEFAULT_EXEC_ARGS = [
   "exec",
   "-",
   "--json",
   "--skip-git-repo-check",
-  "--sandbox",
-  "read-only",
+  "--profile",
+  "codexapi-runtime",
+  "-C",
+  TEST_REQUEST_WORKSPACE,
   "-c",
   'approval_policy="never"',
   "-c",
@@ -27,86 +39,28 @@ const SAFE_DEFAULT_EXEC_ARGS = [
   "--ignore-rules",
   "--ephemeral",
   "--strict-config",
+  "--enable",
+  "browser_use",
+  "--enable",
+  "browser_use_external",
+  "--enable",
+  "code_mode",
+  "--enable",
+  "code_mode_host",
+  "--enable",
+  "in_app_browser",
+  "--enable",
+  "view_image",
   "--disable",
   "shell_tool",
   "--disable",
-  "apps",
-  "--disable",
-  "plugins",
-  "--disable",
   "shell_snapshot",
-  "--disable",
-  "browser_use",
-  "--disable",
-  "browser_use_external",
-  "--disable",
-  "browser_use_full_cdp_access",
-  "--disable",
-  "in_app_browser",
-  "--disable",
-  "computer_use",
-  "--disable",
-  "code_mode",
-  "--disable",
-  "image_generation",
-  "--disable",
-  "multi_agent",
-  "--disable",
-  "memories",
-  "--disable",
-  "hooks",
-  "--disable",
-  "tool_suggest",
-  "--disable",
-  "enable_mcp_apps",
-  "--disable",
-  "skill_mcp_dependency_install",
-  "--disable",
-  "tool_call_mcp_elicitation",
-  "--disable",
-  "code_mode_host",
-  "--disable",
-  "remote_plugin",
-  "--disable",
-  "plugin_sharing",
-  "--disable",
-  "enable_fanout",
-  "--disable",
-  "workspace_dependencies",
-  "--disable",
-  "view_image",
-  "--disable",
-  "auth_elicitation",
-  "--disable",
-  "collaboration_modes",
-  "--disable",
-  "enable_request_compression",
-  "--disable",
-  "fast_mode",
-  "--disable",
-  "goals",
-  "--disable",
-  "guardian_approval",
-  "--disable",
-  "in_app_updates",
-  "--disable",
-  "mentions_v2",
-  "--disable",
-  "personality",
-  "--disable",
-  "remote_compaction_v2",
-  "--disable",
-  "secret_auth_storage",
-  "--disable",
-  "skill_search",
-  "--disable",
-  "sqlite",
-  "--disable",
-  "steer",
   "--disable",
   "unified_exec",
   "-c",
-  'web_search="disabled"',
+  'web_search="live"',
+  "-c",
+  "tools.web_search=true",
 ];
 const TEST_CODEX_HOME = "C:/codex-home";
 const VALID_USAGE = {
@@ -119,10 +73,28 @@ const CODE_MODE_DISABLED_WARNING =
   "Code Mode is unavailable because code-mode host is disabled. Code mode will fail closed; enable `features.code_mode_host` and install `codex-code-mode-host`.";
 
 class FakeReadable extends EventEmitter {
+  private readonly pendingChunks: string[] = [];
+
   push(chunk: string | null): void {
     if (chunk !== null) {
-      this.emit("data", chunk);
+      if (this.listenerCount("data") === 0) {
+        this.pendingChunks.push(chunk);
+      } else {
+        this.emit("data", chunk);
+      }
     }
+  }
+
+  override on(eventName: string | symbol, listener: (...args: any[]) => void): this {
+    super.on(eventName, listener);
+    if (eventName === "data" && this.pendingChunks.length > 0) {
+      queueMicrotask(() => {
+        for (const chunk of this.pendingChunks.splice(0)) {
+          this.emit("data", chunk);
+        }
+      });
+    }
+    return this;
   }
 }
 
@@ -136,9 +108,15 @@ class FakeChildProcess extends EventEmitter {
   stdout = new FakeReadable();
   stderr = new FakeReadable();
   kill = vi.fn();
+  private pendingClose: number | null | undefined;
+  private pendingError: Error | undefined;
 
   close(code: number | null): void {
-    this.emit("close", code, null);
+    if (this.listenerCount("close") === 0) {
+      this.pendingClose = code;
+    } else {
+      this.emit("close", code, null);
+    }
   }
 
   exit(code: number | null): void {
@@ -146,7 +124,26 @@ class FakeChildProcess extends EventEmitter {
   }
 
   fail(error: Error): void {
-    this.emit("error", error);
+    if (this.listenerCount("error") === 0) {
+      this.pendingError = error;
+    } else {
+      this.emit("error", error);
+    }
+  }
+
+  override on(eventName: string | symbol, listener: (...args: any[]) => void): this {
+    super.on(eventName, listener);
+    if (eventName === "close" && this.pendingClose !== undefined) {
+      const code = this.pendingClose;
+      this.pendingClose = undefined;
+      queueMicrotask(() => this.emit("close", code, null));
+    }
+    if (eventName === "error" && this.pendingError) {
+      const error = this.pendingError;
+      this.pendingError = undefined;
+      queueMicrotask(() => this.emit("error", error));
+    }
+    return this;
   }
 }
 
@@ -163,6 +160,19 @@ async function waitUntil(condition: () => boolean): Promise<void> {
     }
     await new Promise((resolve) => setTimeout(resolve, 0));
   }
+}
+
+async function createRunnerRequestWorkspace() {
+  const root = await mkdtemp(join(tmpdir(), "codexapi-runner-workspace-"));
+  const path = join(root, "request");
+  await mkdir(path);
+  const cleanup = vi.fn(async () => rm(path, { recursive: true, force: true }));
+  return {
+    path,
+    cleanup,
+    factory: vi.fn(async () => ({ path, cleanup })),
+    removeRoot: () => rm(root, { recursive: true, force: true }),
+  };
 }
 
 function jsonlCompletion(text: string): string {
@@ -222,7 +232,7 @@ describe("Codex runner", () => {
       "codex",
       SAFE_DEFAULT_EXEC_ARGS,
       expect.objectContaining({
-        cwd: "C:/workspace",
+        cwd: TEST_REQUEST_WORKSPACE,
         shell: false,
         windowsHide: true,
       }),
@@ -234,7 +244,15 @@ describe("Codex runner", () => {
     expect(spawnedArgs).not.toContain(
       "--dangerously-bypass-approvals-and-sandbox",
     );
-    expect(spawnedArgs).not.toContain("--profile");
+    expect(spawnedArgs).toContain("--profile");
+    expect(spawnedArgs).toContain("codexapi-runtime");
+    expect(spawnedArgs).toContain("--enable");
+    expect(spawnedArgs).toContain("code_mode_host");
+    expect(spawnedArgs).toContain("--disable");
+    expect(spawnedArgs).toContain("shell_tool");
+    expect(spawnedArgs).not.toContain("--sandbox");
+    expect(spawnedArgs).toContain('web_search="live"');
+    expect(spawnedArgs).toContain("tools.web_search=true");
     expect(spawnedArgs).not.toContain("browser");
     expect(spawnedArgs).not.toContain("tool_discovery");
   });
@@ -271,7 +289,7 @@ describe("Codex runner", () => {
       command: {
         executable: "codex",
         args: SAFE_DEFAULT_EXEC_ARGS,
-        cwd: "C:/workspace",
+        cwd: TEST_REQUEST_WORKSPACE,
         shell: false,
       },
     });
@@ -341,7 +359,7 @@ describe("Codex runner", () => {
         "model_reasoning_effort=\"medium\"",
       ],
       expect.objectContaining({
-        cwd: "C:/workspace",
+        cwd: TEST_REQUEST_WORKSPACE,
         shell: false,
         windowsHide: true,
       }),
@@ -398,7 +416,7 @@ describe("Codex runner", () => {
     }
   });
 
-  it("disables web search when the request does not opt in", async () => {
+  it("enables native web search regardless of the legacy request option", async () => {
     const child = new FakeChildProcess();
     const spawn = createFakeSpawn(child);
     const runner = createCodexRunner({
@@ -417,7 +435,7 @@ describe("Codex runner", () => {
     expect(spawn.mock.calls[0]?.[1]).toEqual(SAFE_DEFAULT_EXEC_ARGS);
   });
 
-  it("enables only native web search when the request opts in", async () => {
+  it("keeps native web search enabled when the legacy request option is true", async () => {
     const child = new FakeChildProcess();
     const spawn = createFakeSpawn(child);
     const runner = createCodexRunner({
@@ -433,13 +451,7 @@ describe("Codex runner", () => {
     child.close(0);
 
     await expect(resultPromise).resolves.toMatchObject({ stdout: "OK" });
-    expect(spawn.mock.calls[0]?.[1]).toEqual([
-      ...SAFE_DEFAULT_EXEC_ARGS.slice(0, -2),
-      "-c",
-      'web_search="live"',
-      "-c",
-      "tools.web_search=true",
-    ]);
+    expect(spawn.mock.calls[0]?.[1]).toEqual(SAFE_DEFAULT_EXEC_ARGS);
   });
 
   it("attaches each locally created image path to the request", async () => {
@@ -502,12 +514,14 @@ describe("Codex runner", () => {
   it("writes an output schema to a temporary file and removes it after execution", async () => {
     const child = new FakeChildProcess();
     const spawn = createFakeSpawn(child);
+    const requestWorkspace = await createRunnerRequestWorkspace();
     const runner = createCodexRunner({
       command: "codex",
       workspace: "C:/workspace",
       codexHome: TEST_CODEX_HOME,
       timeoutMs: 1000,
       spawn,
+      requestWorkspaceFactory: requestWorkspace.factory,
     });
     const schema = {
       type: "object",
@@ -516,20 +530,114 @@ describe("Codex runner", () => {
       required: ["answer"],
     };
 
-    const resultPromise = runner.runWithDetails!("Hello", { outputSchema: schema });
-    await waitUntil(() => spawn.mock.calls.length === 1);
-    const args = spawn.mock.calls[0]?.[1] ?? [];
-    const schemaFlagIndex = args.indexOf("--output-schema");
-    const schemaPath = args[schemaFlagIndex + 1];
+    try {
+      const resultPromise = runner.runWithDetails!("Hello", { outputSchema: schema });
+      await waitUntil(() => spawn.mock.calls.length === 1);
+      const args = spawn.mock.calls[0]?.[1] ?? [];
+      const schemaFlagIndex = args.indexOf("--output-schema");
+      const schemaPath = args[schemaFlagIndex + 1];
 
-    expect(schemaFlagIndex).toBeGreaterThan(-1);
-    expect(JSON.parse(await readFile(schemaPath, "utf8"))).toEqual(schema);
+      expect(schemaFlagIndex).toBeGreaterThan(-1);
+      expect(schemaPath).toBe(join(requestWorkspace.path, ".codexapi-output-schema.json"));
+      expect(JSON.parse(await readFile(schemaPath, "utf8"))).toEqual(schema);
 
-    child.stdout.push(`${jsonlCompletion('{"answer":"OK"}')}\n`);
-    child.close(0);
+      child.stdout.push(`${jsonlCompletion('{"answer":"OK"}')}\n`);
+      child.close(0);
 
-    await expect(resultPromise).resolves.toMatchObject({ stdout: '{"answer":"OK"}' });
-    await expect(access(schemaPath)).rejects.toThrow();
+      await expect(resultPromise).resolves.toMatchObject({ stdout: '{"answer":"OK"}' });
+      expect(requestWorkspace.cleanup).toHaveBeenCalledOnce();
+      await expect(access(requestWorkspace.path)).rejects.toThrow();
+    } finally {
+      await requestWorkspace.removeRoot();
+    }
+  });
+
+  it.each([
+    ["nonzero exit", "NON_ZERO_EXIT", (child: FakeChildProcess) => child.close(1)],
+    ["spawn failure", "SPAWN_ERROR", (child: FakeChildProcess) => child.fail(new Error("ENOENT"))],
+    [
+      "structured-output failure",
+      "INVALID_OUTPUT",
+      (child: FakeChildProcess) => {
+        child.stdout.push("not json\n");
+        child.close(0);
+      },
+    ],
+  ])("removes the request workspace after a %s", async (_name, code, finish) => {
+    const child = new FakeChildProcess();
+    const requestWorkspace = await createRunnerRequestWorkspace();
+    const runner = createCodexRunner({
+      command: "codex",
+      workspace: "C:/workspace",
+      codexHome: TEST_CODEX_HOME,
+      timeoutMs: 1000,
+      spawn: createFakeSpawn(child),
+      requestWorkspaceFactory: requestWorkspace.factory,
+    });
+
+    try {
+      const resultPromise = runner.run("Hello");
+      await waitUntil(() => requestWorkspace.factory.mock.calls.length === 1);
+      finish(child);
+
+      await expect(resultPromise).rejects.toMatchObject({ code });
+      expect(requestWorkspace.cleanup).toHaveBeenCalledOnce();
+      await expect(access(requestWorkspace.path)).rejects.toThrow();
+    } finally {
+      await requestWorkspace.removeRoot();
+    }
+  });
+
+  it("removes the request workspace after a timeout once the child closes", async () => {
+    const child = new FakeChildProcess();
+    const requestWorkspace = await createRunnerRequestWorkspace();
+    const runner = createCodexRunner({
+      command: "codex",
+      workspace: "C:/workspace",
+      codexHome: TEST_CODEX_HOME,
+      timeoutMs: 5,
+      spawn: createFakeSpawn(child),
+      requestWorkspaceFactory: requestWorkspace.factory,
+    });
+
+    try {
+      const resultPromise = runner.run("Hello");
+      await waitUntil(() => child.kill.mock.calls.length === 1);
+      child.close(null);
+
+      await expect(resultPromise).rejects.toMatchObject({ code: "TIMEOUT" });
+      expect(requestWorkspace.cleanup).toHaveBeenCalledOnce();
+      await expect(access(requestWorkspace.path)).rejects.toThrow();
+    } finally {
+      await requestWorkspace.removeRoot();
+    }
+  });
+
+  it("removes the request workspace after cancellation once the child closes", async () => {
+    const controller = new AbortController();
+    const child = new FakeChildProcess();
+    const requestWorkspace = await createRunnerRequestWorkspace();
+    const runner = createCodexRunner({
+      command: "codex",
+      workspace: "C:/workspace",
+      codexHome: TEST_CODEX_HOME,
+      timeoutMs: 1000,
+      spawn: createFakeSpawn(child),
+      requestWorkspaceFactory: requestWorkspace.factory,
+    });
+
+    try {
+      const resultPromise = runner.runWithDetails!("Hello", { signal: controller.signal });
+      await waitUntil(() => requestWorkspace.factory.mock.calls.length === 1);
+      controller.abort();
+      child.close(null);
+
+      await expect(resultPromise).rejects.toMatchObject({ code: "CANCELLED" });
+      expect(requestWorkspace.cleanup).toHaveBeenCalledOnce();
+      await expect(access(requestWorkspace.path)).rejects.toThrow();
+    } finally {
+      await requestWorkspace.removeRoot();
+    }
   });
 
   it("rejects with a typed error when codex exits non-zero", async () => {
@@ -556,7 +664,7 @@ describe("Codex runner", () => {
       command: {
         executable: "codex",
         args: ["C:/codex/codex.js", ...SAFE_DEFAULT_EXEC_ARGS],
-        cwd: "C:/workspace",
+        cwd: TEST_REQUEST_WORKSPACE,
         shell: false,
       },
     });
@@ -625,7 +733,7 @@ describe("Codex runner", () => {
     },
   );
 
-  it("rejects a web-search item when the request did not opt in", async () => {
+  it("accepts a web-search item when the legacy request option is false", async () => {
     const child = new FakeChildProcess();
     const spawn = createFakeSpawn(child);
     const runner = createCodexRunner({
@@ -661,13 +769,10 @@ describe("Codex runner", () => {
     child.stdout.push(`${rawStdout}\n`);
     child.close(0);
 
-    await expect(resultPromise).rejects.toMatchObject({
-      name: "CodexRunnerError",
-      code: "INVALID_OUTPUT",
-    });
+    await expect(resultPromise).resolves.toMatchObject({ stdout: "concealed" });
   });
 
-  it("accepts web-search items only when the request opted in", async () => {
+  it("accepts web-search items when the legacy request option is true", async () => {
     const child = new FakeChildProcess();
     const spawn = createFakeSpawn(child);
     const runner = createCodexRunner({
@@ -1058,6 +1163,7 @@ describe("Codex runner", () => {
     const resultPromise = runner.runWithDetails!("sensitive prompt", {
       signal: controller.signal,
     });
+    await waitUntil(() => spawn.mock.calls.length === 1);
     const rejection = expect(resultPromise).rejects.toMatchObject({
       code: "CANCELLED",
       stdout: "partial output",
@@ -1120,6 +1226,8 @@ describe("Codex runner", () => {
     });
 
     try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(spawn).toHaveBeenCalledOnce();
       controller.abort();
       expect(child.kill).toHaveBeenNthCalledWith(1, "SIGTERM");
       await vi.advanceTimersByTimeAsync(49);
@@ -1157,6 +1265,7 @@ describe("Codex runner", () => {
     const child = new FakeChildProcess();
     child.kill.mockReturnValue(false);
     const spawn = createFakeSpawn(child);
+    const requestWorkspace = await createRunnerRequestWorkspace();
     const runner = createCodexRunner({
       command: "codex",
       commandArgs: [],
@@ -1166,6 +1275,7 @@ describe("Codex runner", () => {
       terminationGraceMs: 5,
       forceTerminationGraceMs: 5,
       spawn,
+      requestWorkspaceFactory: requestWorkspace.factory,
     });
 
     const resultPromise = runner.runWithDetails!("sensitive prompt", {
@@ -1190,6 +1300,7 @@ describe("Codex runner", () => {
       });
       expect(child.kill.mock.calls).toEqual([["SIGTERM"], ["SIGKILL"]]);
       await expect(access(schemaPath)).resolves.toBeUndefined();
+      await expect(access(requestWorkspace.path)).resolves.toBeUndefined();
       expect(child.listenerCount("close")).toBe(1);
       expect(child.listenerCount("error")).toBe(1);
 
@@ -1203,13 +1314,15 @@ describe("Codex runner", () => {
       await vi.waitFor(async () => {
         await expect(access(schemaPath)).rejects.toThrow();
       });
+      await expect(access(requestWorkspace.path)).rejects.toThrow();
+      expect(requestWorkspace.cleanup).toHaveBeenCalledOnce();
       expect(child.kill).toHaveBeenCalledTimes(2);
       expect(child.eventNames()).toEqual([]);
       expect(child.stdout.eventNames()).toEqual([]);
       expect(child.stderr.eventNames()).toEqual([]);
     } finally {
       await capturedResult;
-      await rm(dirname(schemaPath), { recursive: true, force: true });
+      await requestWorkspace.removeRoot();
     }
   });
 
@@ -1237,6 +1350,8 @@ describe("Codex runner", () => {
       signal: controller.signal,
     });
     try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(spawn).toHaveBeenCalledOnce();
       controller.abort();
       await expect(resultPromise).rejects.toMatchObject({ code: "CANCELLED" });
       expect(child.kill).toHaveBeenCalledTimes(1);
@@ -1251,6 +1366,7 @@ describe("Codex runner", () => {
     const controller = new AbortController();
     const child = new FakeChildProcess();
     const spawn = createFakeSpawn(child);
+    const requestWorkspace = await createRunnerRequestWorkspace();
     const runner = createCodexRunner({
       command: "codex",
       commandArgs: [],
@@ -1258,6 +1374,7 @@ describe("Codex runner", () => {
       codexHome: TEST_CODEX_HOME,
       timeoutMs: 1000,
       spawn,
+      requestWorkspaceFactory: requestWorkspace.factory,
     });
 
     const resultPromise = runner.runWithDetails!("sensitive prompt", {
@@ -1276,6 +1393,8 @@ describe("Codex runner", () => {
 
     await expect(resultPromise).rejects.toMatchObject({ code: "CANCELLED" });
     await expect(access(schemaPath)).rejects.toThrow();
+    expect(requestWorkspace.cleanup).toHaveBeenCalledOnce();
+    await requestWorkspace.removeRoot();
   });
 
   it("kills the child on timeout and rejects with TIMEOUT only after it closes", async () => {

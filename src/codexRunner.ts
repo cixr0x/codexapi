@@ -1,9 +1,12 @@
 import { spawn as nodeSpawn, type ChildProcess, type SpawnOptions } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { CODEX_EXECUTION_POLICY } from "./executionPolicy.js";
+import {
+  createRequestWorkspace,
+  type RequestWorkspaceFactory,
+} from "./requestWorkspace.js";
 
 const CODE_MODE_DISABLED_WARNING =
   "Code Mode is unavailable because code-mode host is disabled. Code mode will fail closed; enable `features.code_mode_host` and install `codex-code-mode-host`.";
@@ -72,6 +75,7 @@ export interface CodexRunnerConfig {
   terminationGraceMs?: number;
   forceTerminationGraceMs?: number;
   spawn?: SpawnFn;
+  requestWorkspaceFactory?: RequestWorkspaceFactory;
 }
 
 export interface CodexRunOptions {
@@ -145,46 +149,48 @@ export function runCodexPrompt(
   return runCodexPromptWithDetails(prompt, config).then((result) => result.stdout);
 }
 
-export function runCodexPromptWithDetails(
+export async function runCodexPromptWithDetails(
   prompt: string,
   config: CodexRunnerConfig,
   options: CodexRunOptions = {},
 ): Promise<CodexRunResult> {
   if (options.signal?.aborted) {
-    return Promise.reject(cancelledRunnerError());
-  }
-  if (options.outputSchema === undefined) {
-    return runCodexProcess(prompt, config, options);
+    throw cancelledRunnerError();
   }
 
-  return runCodexWithOutputSchema(prompt, config, options);
-}
-
-async function runCodexWithOutputSchema(
-  prompt: string,
-  config: CodexRunnerConfig,
-  options: CodexRunOptions,
-): Promise<CodexRunResult> {
-  const schemaDir = await mkdtemp(join(tmpdir(), "codexapi-output-schema-"));
-  const schemaPath = join(schemaDir, "schema.json");
+  const requestWorkspace = await (config.requestWorkspaceFactory ?? createRequestWorkspace)(
+    config.workspace,
+  );
   let cleanupSafe = true;
 
   try {
-    await writeFile(schemaPath, JSON.stringify(options.outputSchema), "utf8");
-    return await runCodexProcess(prompt, config, options, schemaPath);
+    const outputSchemaPath =
+      options.outputSchema === undefined
+        ? undefined
+        : join(requestWorkspace.path, ".codexapi-output-schema.json");
+    if (outputSchemaPath) {
+      await writeFile(outputSchemaPath, JSON.stringify(options.outputSchema), "utf8");
+    }
+    return await runCodexProcess(
+      prompt,
+      config,
+      options,
+      requestWorkspace.path,
+      outputSchemaPath,
+    );
   } catch (error) {
     if (error instanceof CodexRunnerError && error.childMayBeRunning) {
       cleanupSafe = false;
       if (error.cleanupWhenSafe) {
         cleanupAfterSafeSignal(error.cleanupWhenSafe, () =>
-          rm(schemaDir, { recursive: true, force: true }),
+          requestWorkspace.cleanup(),
         );
       }
     }
     throw error;
   } finally {
     if (cleanupSafe) {
-      await rm(schemaDir, { recursive: true, force: true });
+      await requestWorkspace.cleanup();
     }
   }
 }
@@ -194,7 +200,6 @@ function runCodexProcess(
   {
     command,
     commandArgs = [],
-    workspace,
     codexHome,
     timeoutMs,
     maxOutputBytes = 1024 * 1024,
@@ -203,6 +208,7 @@ function runCodexProcess(
     spawn = nodeSpawn,
   }: CodexRunnerConfig,
   options: CodexRunOptions,
+  requestWorkspacePath: string,
   outputSchemaPath?: string,
 ): Promise<CodexRunResult> {
   if (options.signal?.aborted) {
@@ -218,8 +224,10 @@ function runCodexProcess(
     "-",
     "--json",
     "--skip-git-repo-check",
-    "--sandbox",
-    CODEX_EXECUTION_POLICY.sandbox,
+    "--profile",
+    CODEX_EXECUTION_POLICY.permissionProfile,
+    "-C",
+    requestWorkspacePath,
     "-c",
     `approval_policy=${tomlString(CODEX_EXECUTION_POLICY.approvalPolicy)}`,
     "-c",
@@ -228,10 +236,12 @@ function runCodexProcess(
     "--ignore-rules",
     "--ephemeral",
     "--strict-config",
+    ...CODEX_EXECUTION_POLICY.requiredFeatures.flatMap(({ name }) => ["--enable", name]),
     ...CODEX_EXECUTION_POLICY.disabledFeatures.flatMap((name) => ["--disable", name]),
     "-c",
-    `web_search=${options.webSearch ? '"live"' : '"disabled"'}`,
-    ...(options.webSearch ? ["-c", "tools.web_search=true"] : []),
+    'web_search="live"',
+    "-c",
+    "tools.web_search=true",
     ...imagePaths.flatMap((path) => ["--image", path]),
     ...(model ? ["--model", model] : []),
     ...(reasoningEffort
@@ -242,7 +252,7 @@ function runCodexProcess(
   const commandDetails: CodexCommandDetails = {
     executable: command,
     args,
-    cwd: workspace,
+    cwd: requestWorkspacePath,
     shell: false,
   };
 
@@ -260,7 +270,7 @@ function runCodexProcess(
     });
 
     const child = spawn(command, args, {
-      cwd: workspace,
+      cwd: requestWorkspacePath,
       shell: false,
       windowsHide: true,
       stdio: ["pipe", "pipe", "pipe"],
@@ -359,7 +369,7 @@ function runCodexProcess(
         }
 
         try {
-          const parsed = parseCodexOutput(rawStdout, options.webSearch === true);
+          const parsed = parseCodexOutput(rawStdout, true);
           resolve({
             stdout: parsed.output,
             rawStdout,
