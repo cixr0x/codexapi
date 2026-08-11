@@ -41,7 +41,40 @@ function single(section: Map<string, string[]>, key: string): string {
   return values![0];
 }
 
+function parseEnvironmentAssignments(
+  assignments: string[] | undefined,
+): Map<string, string> {
+  if (!assignments) {
+    throw new Error("missing Environment assignments");
+  }
+
+  const environment = new Map<string, string>();
+  for (const assignment of assignments) {
+    const match = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/u.exec(assignment);
+    if (!match) {
+      throw new Error(`malformed Environment assignment: ${assignment}`);
+    }
+
+    const [, name, value] = match;
+    if (environment.has(name)) {
+      throw new Error(`duplicate Environment assignment for ${name}`);
+    }
+    environment.set(name, value);
+  }
+
+  return environment;
+}
+
 describe("production systemd unit", () => {
+  it("rejects a later duplicate environment assignment", () => {
+    expect(() =>
+      parseEnvironmentAssignments([
+        "CODEX_HOME=/var/lib/codexapi/home",
+        "CODEX_HOME=/etc",
+      ]),
+    ).toThrow("duplicate Environment assignment for CODEX_HOME");
+  });
+
   it("runs the loopback-only service inside the dedicated filesystem boundary", () => {
     const unit = parseUnit(
       readFileSync(join(process.cwd(), "deploy", "codexapi.service"), "utf8"),
@@ -53,15 +86,14 @@ describe("production systemd unit", () => {
     expect(single(service!, "Group")).toBe("codexapi");
     expect(single(service!, "WorkingDirectory")).toBe("/opt/ludora/codexapi");
 
-    expect(service!.get("Environment")).toEqual(
-      expect.arrayContaining([
-        "HOST=127.0.0.1",
-        "PORT=3001",
-        "HOME=/var/lib/codexapi",
-        "CODEX_HOME=/var/lib/codexapi/home",
-        "CODEX_WORKSPACE=/var/lib/codexapi/workspace",
-      ]),
-    );
+    const environment = parseEnvironmentAssignments(service!.get("Environment"));
+    expect(Object.fromEntries(environment)).toMatchObject({
+      HOST: "127.0.0.1",
+      PORT: "3001",
+      HOME: "/var/lib/codexapi",
+      CODEX_HOME: "/var/lib/codexapi/home",
+      CODEX_WORKSPACE: "/var/lib/codexapi/workspace",
+    });
     expect(service!.has("EnvironmentFile")).toBe(false);
 
     expect(single(service!, "NoNewPrivileges")).toBe("true");
