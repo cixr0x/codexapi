@@ -28,7 +28,7 @@ Do not choose another port automatically. If port `3001` is busy, report the own
 - Codex API unit: `codexapi.service`, bound to `127.0.0.1:3001`
 - nginx serves the admin UI and proxies `/api/` to the admin service only.
 - Keep Codex API loopback-only. Never add an nginx route or GCP firewall rule for port `3001`.
-- The CodexAPI production service must run as the dedicated `codexapi` system user and group, with a dedicated `HOME`/`CODEX_HOME` and empty `/var/lib/codexapi/workspace` owned only by that identity. It must not run as `robertorojas87`, `mcp13`, or the Ludora admin-service identity.
-- This repository change documents the intended identity boundary only. Provisioning the account, moving authentication, changing `codexapi.service`, and verification/rollback remain future deployment-runbook work; do not perform them from local development without an explicit deployment request.
+- The checked-in `deploy/codexapi.service` is the production service boundary: it runs as the dedicated `codexapi` user and group, uses only `/var/lib/codexapi` for writable runtime state, and keeps port `3001` loopback-only.
+- Install, deploy, and roll back that unit only through the Ludora production runbook and only when deployment is explicitly requested. Never run CodexAPI as the deployment user, an admin-service identity, or behind nginx.
 
 Do not run DDL or DML SQL commands without user confirmation.
