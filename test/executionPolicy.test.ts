@@ -61,6 +61,7 @@ const EXPECTED_POLICY = {
     "skill_search",
     "sqlite",
     "steer",
+    "unified_exec",
   ],
   allowedEnabledFeatures: [
     { name: "item_ids", maturity: "removed" },

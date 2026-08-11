@@ -103,6 +103,8 @@ const SAFE_DEFAULT_EXEC_ARGS = [
   "sqlite",
   "--disable",
   "steer",
+  "--disable",
+  "unified_exec",
   "-c",
   'web_search="disabled"',
 ];

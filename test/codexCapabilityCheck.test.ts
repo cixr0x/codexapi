@@ -133,6 +133,7 @@ const DISABLED_FEATURE_OUTPUT = [
   "skill_search stable false",
   "sqlite removed false",
   "steer removed false",
+  "unified_exec stable false",
   "terminal_resize_reflow removed true",
   "tool_search_always_defer_mcp_tools removed true",
   "tui_app_server removed true",

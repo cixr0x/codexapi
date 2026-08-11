@@ -56,6 +56,7 @@ export const CODEX_EXECUTION_POLICY = Object.freeze({
     "skill_search",
     "sqlite",
     "steer",
+    "unified_exec",
   ]),
   // Exact 0.147.0 reports these non-toggleable, removed/no-op rows as true.
   allowedEnabledFeatures: Object.freeze([
