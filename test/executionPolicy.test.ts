@@ -14,61 +14,22 @@ import {
   CODEX_EXECUTION_POLICY,
   assertSafeExecutionConfig,
   executionPolicyHealth,
-  type CodexRequestCapabilities,
 } from "../src/executionPolicy.js";
 
 const EXPECTED_POLICY = {
   backend: "exec",
-  sandbox: "read-only",
+  permissionProfile: "codexapi-runtime",
   approvalPolicy: "never",
-  mcpServers: "disabled",
-  disabledFeatures: [
-    "shell_tool",
-    "apps",
-    "plugins",
-    "shell_snapshot",
-    "browser_use",
-    "browser_use_external",
-    "browser_use_full_cdp_access",
-    "in_app_browser",
-    "computer_use",
-    "code_mode",
-    "image_generation",
-    "multi_agent",
-    "memories",
-    "hooks",
-    "tool_suggest",
-    "enable_mcp_apps",
-    "skill_mcp_dependency_install",
-    "tool_call_mcp_elicitation",
-    "code_mode_host",
-    "remote_plugin",
-    "plugin_sharing",
-    "enable_fanout",
-    "workspace_dependencies",
-    "view_image",
-    "auth_elicitation",
-    "collaboration_modes",
-    "enable_request_compression",
-    "fast_mode",
-    "goals",
-    "guardian_approval",
-    "in_app_updates",
-    "mentions_v2",
-    "personality",
-    "remote_compaction_v2",
-    "secret_auth_storage",
-    "skill_search",
-    "sqlite",
-    "steer",
-    "unified_exec",
-  ],
-  allowedEnabledFeatures: [
-    { name: "item_ids", maturity: "removed" },
-    { name: "resize_all_images", maturity: "removed" },
-    { name: "terminal_resize_reflow", maturity: "removed" },
-    { name: "tool_search_always_defer_mcp_tools", maturity: "removed" },
-    { name: "tui_app_server", maturity: "removed" },
+  mcpServers: "empty",
+  defaultWebSearch: true,
+  disabledFeatures: ["shell_tool", "shell_snapshot", "unified_exec"],
+  requiredFeatures: [
+    { name: "browser_use", maturity: "stable" },
+    { name: "browser_use_external", maturity: "stable" },
+    { name: "code_mode", maturity: "under development" },
+    { name: "code_mode_host", maturity: "stable" },
+    { name: "in_app_browser", maturity: "stable" },
+    { name: "view_image", maturity: "stable" },
   ],
   ignoreUserConfig: true,
   ignoreRules: true,
@@ -98,31 +59,24 @@ describe("Codex execution policy", () => {
     expect(CODEX_EXECUTION_POLICY).toMatchObject(EXPECTED_POLICY);
     expect(Object.isFrozen(CODEX_EXECUTION_POLICY)).toBe(true);
     expect(Object.isFrozen(CODEX_EXECUTION_POLICY.disabledFeatures)).toBe(true);
-    expect(Object.isFrozen(CODEX_EXECUTION_POLICY.allowedEnabledFeatures)).toBe(true);
+    expect(Object.isFrozen(CODEX_EXECUTION_POLICY.requiredFeatures)).toBe(true);
     expect(
-      CODEX_EXECUTION_POLICY.allowedEnabledFeatures.every((feature) =>
+      CODEX_EXECUTION_POLICY.requiredFeatures.every((feature) =>
         Object.isFrozen(feature),
       ),
     ).toBe(true);
-    expect(CODEX_EXECUTION_POLICY.disabledFeatures).not.toContain("browser");
-    expect(CODEX_EXECUTION_POLICY.disabledFeatures).not.toContain("tool_discovery");
 
     const health = executionPolicyHealth();
     expect(JSON.parse(JSON.stringify(health))).toEqual(EXPECTED_POLICY);
     expect(health).not.toBe(CODEX_EXECUTION_POLICY);
     expect(health.disabledFeatures).not.toBe(CODEX_EXECUTION_POLICY.disabledFeatures);
-    expect(health.allowedEnabledFeatures).not.toBe(
-      CODEX_EXECUTION_POLICY.allowedEnabledFeatures,
+    expect(health.requiredFeatures).not.toBe(
+      CODEX_EXECUTION_POLICY.requiredFeatures,
     );
-  });
-
-  it("defines normalized per-request capabilities", () => {
-    const capabilities: CodexRequestCapabilities = {
-      webSearch: false,
-      imagePaths: [],
-    };
-
-    expect(capabilities).toEqual({ webSearch: false, imagePaths: [] });
+    expect(health.requiredFeatures[0]).not.toBe(
+      CODEX_EXECUTION_POLICY.requiredFeatures[0],
+    );
+    expect(health).not.toHaveProperty("allowedEnabledFeatures");
   });
 
   it.each(["", "   ", "relative/inference"])(

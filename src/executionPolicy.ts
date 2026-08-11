@@ -7,58 +7,28 @@ import type { AppConfig } from "./config.js";
 const MODULE_DIRECTORY = dirname(fileURLToPath(import.meta.url));
 const CODEXAPI_CHECKOUT = findPackageRoot(MODULE_DIRECTORY);
 
-export interface CodexRequestCapabilities {
-  webSearch: boolean;
-  imagePaths: readonly string[];
-}
-
 export const CODEX_EXECUTION_POLICY = Object.freeze({
   backend: "exec" as const,
-  sandbox: "read-only" as const,
+  permissionProfile: "codexapi-runtime" as const,
   approvalPolicy: "never" as const,
-  mcpServers: "disabled" as const,
+  mcpServers: "empty" as const,
+  defaultWebSearch: true as const,
   disabledFeatures: Object.freeze([
     "shell_tool",
-    "apps",
-    "plugins",
     "shell_snapshot",
-    "browser_use",
-    "browser_use_external",
-    "browser_use_full_cdp_access",
-    "in_app_browser",
-    "computer_use",
-    "code_mode",
-    "image_generation",
-    "multi_agent",
-    "memories",
-    "hooks",
-    "tool_suggest",
-    "enable_mcp_apps",
-    "skill_mcp_dependency_install",
-    "tool_call_mcp_elicitation",
-    "code_mode_host",
-    "remote_plugin",
-    "plugin_sharing",
-    "enable_fanout",
-    "workspace_dependencies",
-    "view_image",
-    "auth_elicitation",
-    "collaboration_modes",
-    "enable_request_compression",
-    "fast_mode",
-    "goals",
-    "guardian_approval",
-    "in_app_updates",
-    "mentions_v2",
-    "personality",
-    "remote_compaction_v2",
-    "secret_auth_storage",
-    "skill_search",
-    "sqlite",
-    "steer",
     "unified_exec",
   ]),
-  // Exact 0.147.0 reports these non-toggleable, removed/no-op rows as true.
+  requiredFeatures: Object.freeze([
+    Object.freeze({ name: "browser_use", maturity: "stable" as const }),
+    Object.freeze({ name: "browser_use_external", maturity: "stable" as const }),
+    Object.freeze({ name: "code_mode", maturity: "under development" as const }),
+    Object.freeze({ name: "code_mode_host", maturity: "stable" as const }),
+    Object.freeze({ name: "in_app_browser", maturity: "stable" as const }),
+    Object.freeze({ name: "view_image", maturity: "stable" as const }),
+  ]),
+  // Retained only until the deferred runner and capability-attestation tasks
+  // consume the profile and requiredFeatures contracts above.
+  sandbox: "read-only" as const,
   allowedEnabledFeatures: Object.freeze([
     Object.freeze({ name: "item_ids", maturity: "removed" as const }),
     Object.freeze({ name: "resize_all_images", maturity: "removed" as const }),
@@ -78,11 +48,12 @@ export const CODEX_EXECUTION_POLICY = Object.freeze({
 export function executionPolicyHealth() {
   return {
     backend: CODEX_EXECUTION_POLICY.backend,
-    sandbox: CODEX_EXECUTION_POLICY.sandbox,
+    permissionProfile: CODEX_EXECUTION_POLICY.permissionProfile,
     approvalPolicy: CODEX_EXECUTION_POLICY.approvalPolicy,
     mcpServers: CODEX_EXECUTION_POLICY.mcpServers,
+    defaultWebSearch: CODEX_EXECUTION_POLICY.defaultWebSearch,
     disabledFeatures: [...CODEX_EXECUTION_POLICY.disabledFeatures],
-    allowedEnabledFeatures: CODEX_EXECUTION_POLICY.allowedEnabledFeatures.map(
+    requiredFeatures: CODEX_EXECUTION_POLICY.requiredFeatures.map(
       (feature) => ({ ...feature }),
     ),
     ignoreUserConfig: CODEX_EXECUTION_POLICY.ignoreUserConfig,

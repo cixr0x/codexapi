@@ -1,0 +1,39 @@
+default_permissions = "codexapi-runtime"
+web_search = "live"
+
+[tools]
+web_search = true
+view_image = true
+
+[permissions.codexapi-runtime]
+description = "Public-web research with request-workspace-only writes."
+
+[permissions.codexapi-runtime.filesystem]
+":minimal" = "read"
+"/opt/ludora/ludora-admin" = "deny"
+"/opt/ludora/codexapi" = "deny"
+"/home" = "deny"
+"/root" = "deny"
+"/var/lib/codexapi/home" = "deny"
+
+[permissions.codexapi-runtime.filesystem.":workspace_roots"]
+"." = "write"
+"**/.env" = "deny"
+"**/.env.*" = "deny"
+
+[permissions.codexapi-runtime.network]
+enabled = true
+mode = "limited"
+allow_local_binding = false
+allow_upstream_proxy = false
+dangerously_allow_all_unix_sockets = false
+dangerously_allow_non_loopback_proxy = false
+
+[permissions.codexapi-runtime.network.domains]
+"*" = "allow"
+"localhost" = "deny"
+"**.localhost" = "deny"
+"127.0.0.1" = "deny"
+"::1" = "deny"
+"169.254.169.254" = "deny"
+"metadata.google.internal" = "deny"
