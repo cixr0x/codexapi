@@ -65,7 +65,7 @@ export interface CreateServerOptions {
     url: string,
     dependencies?: SafeRemoteImageDependencies,
   ) => Promise<PreparedRemoteImage>;
-  requestSignal?: (request: FastifyRequest) => AbortSignal;
+  requestSignal?: (request: FastifyRequest, reply: FastifyReply) => AbortSignal;
   capabilityReport?: CodexCapabilityReport;
 }
 
@@ -82,7 +82,7 @@ export function createServer(options: CreateServerOptions = {}): FastifyInstance
     logDir: config.callLogDir,
   });
   const prepareRemoteImage = options.prepareRemoteImage ?? defaultPrepareRemoteImage;
-  const requestSignal = options.requestSignal ?? ((request: FastifyRequest) => request.signal);
+  const requestSignal = options.requestSignal ?? createClientDisconnectSignal;
 
   const app = Fastify({ logger: options.logger ?? false });
 
@@ -202,7 +202,7 @@ export function createServer(options: CreateServerOptions = {}): FastifyInstance
     let preparedImage = emptyPreparedRemoteImage();
     let preparedImageCleanupSafe = true;
     let preparedImageCleanupWhenSafe: Promise<void> | undefined;
-    const disconnectSignal = requestSignal(request);
+    const disconnectSignal = requestSignal(request, reply);
 
     try {
       const normalizedRequest = normalizeResponsesRequest(request.body);
@@ -293,6 +293,48 @@ export function createServer(options: CreateServerOptions = {}): FastifyInstance
   });
 
   return app;
+}
+
+function createClientDisconnectSignal(
+  request: FastifyRequest,
+  reply: FastifyReply,
+): AbortSignal {
+  const controller = new AbortController();
+  const rawRequest = request.raw;
+  const rawReply = reply.raw;
+  const socket = rawRequest.socket;
+
+  const cleanup = () => {
+    rawRequest.off("aborted", onDisconnect);
+    socket.off("close", onDisconnect);
+    rawReply.off("finish", onFinish);
+    rawReply.off("close", onReplyClose);
+  };
+  const onDisconnect = () => {
+    if (!rawReply.writableEnded && !controller.signal.aborted) {
+      controller.abort();
+    }
+    cleanup();
+  };
+  const onFinish = () => cleanup();
+  const onReplyClose = () => {
+    if (!rawReply.writableEnded) {
+      onDisconnect();
+      return;
+    }
+    cleanup();
+  };
+
+  rawRequest.once("aborted", onDisconnect);
+  socket.once("close", onDisconnect);
+  rawReply.once("finish", onFinish);
+  rawReply.once("close", onReplyClose);
+
+  if (rawRequest.aborted || (socket.destroyed && !rawReply.writableEnded)) {
+    onDisconnect();
+  }
+
+  return controller.signal;
 }
 
 function cleanupPreparedImageWhenSafe(

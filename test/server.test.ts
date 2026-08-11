@@ -1,5 +1,6 @@
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { EventEmitter } from "node:events";
+import { request as httpRequest } from "node:http";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -115,6 +116,114 @@ async function tempDir(): Promise<string> {
 }
 
 describe("Fastify server", () => {
+  it("does not treat a fully received live request body as a client disconnect", async () => {
+    const { runner, runWithDetails } = fakeDetailedRunner("READY");
+    const defaultRun = runWithDetails.getMockImplementation();
+    runWithDetails.mockImplementation(async (...args) => {
+      const signal = args[1]?.signal;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(signal).toBeInstanceOf(AbortSignal);
+      expect(signal?.aborted).toBe(false);
+      return await defaultRun!(...args);
+    });
+    const app = createServer({ config: testConfig(), runner });
+
+    await app.listen({ host: "127.0.0.1", port: 0 });
+    try {
+      const address = app.server.address();
+      expect(address).not.toBeNull();
+      expect(typeof address).not.toBe("string");
+      if (address === null || typeof address === "string") {
+        throw new Error("Expected a TCP listener.");
+      }
+
+      const response = await fetch(
+        `http://127.0.0.1:${address.port}/v1/responses`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            model: "gpt-5.4-mini",
+            input: "Return exactly READY.",
+          }),
+        },
+      );
+
+      expect(response.status).toBe(200);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("aborts a live request only when the client disconnects before the response", async () => {
+    let notifyRunnerStarted!: () => void;
+    const runnerStarted = new Promise<void>((resolve) => {
+      notifyRunnerStarted = resolve;
+    });
+    let notifyRunnerCancelled!: () => void;
+    const runnerCancelled = new Promise<void>((resolve) => {
+      notifyRunnerCancelled = resolve;
+    });
+    let observedSignal: AbortSignal | undefined;
+    const runWithDetails = vi.fn<NonNullable<CodexRunner["runWithDetails"]>>(
+      async (_prompt, options) => {
+        observedSignal = options?.signal;
+        notifyRunnerStarted();
+        await new Promise<void>((resolve) => {
+          if (observedSignal?.aborted) {
+            resolve();
+          } else {
+            observedSignal?.addEventListener("abort", () => resolve(), {
+              once: true,
+            });
+          }
+        });
+        notifyRunnerCancelled();
+        throw new CodexRunnerError({
+          message: "Codex command was cancelled.",
+          code: "CANCELLED",
+        });
+      },
+    );
+    const app = createServer({
+      config: testConfig(),
+      runner: { run: vi.fn(async () => "unused"), runWithDetails },
+    });
+
+    await app.listen({ host: "127.0.0.1", port: 0 });
+    try {
+      const address = app.server.address();
+      if (address === null || typeof address === "string") {
+        throw new Error("Expected a TCP listener.");
+      }
+      const body = JSON.stringify({
+        model: "gpt-5.4-mini",
+        input: "Wait for disconnect.",
+      });
+      const clientRequest = httpRequest({
+        host: "127.0.0.1",
+        port: address.port,
+        path: "/v1/responses",
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "content-length": Buffer.byteLength(body),
+        },
+      });
+      clientRequest.on("error", () => undefined);
+      clientRequest.end(body);
+
+      await runnerStarted;
+      expect(observedSignal?.aborted).toBe(false);
+      clientRequest.destroy();
+      await runnerCancelled;
+      expect(observedSignal?.aborted).toBe(true);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    } finally {
+      await app.close();
+    }
+  });
+
   it("rejects an unsafe direct startup config before probing or listening", async () => {
     const { runner } = fakeRunner();
     const spawn = vi.fn();
