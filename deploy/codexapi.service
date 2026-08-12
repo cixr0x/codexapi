@@ -8,6 +8,7 @@ Type=simple
 User=codexapi
 Group=codexapi
 WorkingDirectory=/opt/ludora/codexapi
+ExecStartPre=/usr/bin/install -m 0400 /opt/ludora/codexapi/deploy/codexapi-runtime.config.toml /var/lib/codexapi/home/codexapi-runtime.config.toml
 ExecStart=/usr/bin/node /opt/ludora/codexapi/dist/src/server.js
 Restart=on-failure
 RestartSec=5s
@@ -40,7 +41,7 @@ CapabilityBoundingSet=
 AmbientCapabilities=
 ReadOnlyPaths=/opt/ludora/codexapi
 ReadWritePaths=/var/lib/codexapi
-InaccessiblePaths=/opt/ludora/ludora-admin /home/robertorojas87
+InaccessiblePaths=/opt/ludora/ludora-admin /home /root
 UMask=0077
 
 [Install]

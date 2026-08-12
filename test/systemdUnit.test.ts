@@ -86,8 +86,13 @@ describe("production systemd unit", () => {
     expect(single(service!, "Group")).toBe("codexapi");
     expect(single(service!, "WorkingDirectory")).toBe("/opt/ludora/codexapi");
 
+    expect(single(service!, "ExecStartPre")).toBe(
+      "/usr/bin/install -m 0400 /opt/ludora/codexapi/deploy/codexapi-runtime.config.toml /var/lib/codexapi/home/codexapi-runtime.config.toml",
+    );
+
     const environment = parseEnvironmentAssignments(service!.get("Environment"));
-    expect(Object.fromEntries(environment)).toMatchObject({
+    expect(Object.fromEntries(environment)).toEqual({
+      NODE_ENV: "production",
       HOST: "127.0.0.1",
       PORT: "3001",
       HOME: "/var/lib/codexapi",
@@ -100,9 +105,11 @@ describe("production systemd unit", () => {
     expect(single(service!, "ProtectSystem")).toBe("strict");
     expect(single(service!, "PrivateTmp")).toBe("true");
     expect(single(service!, "ProtectHome")).toBe("true");
+    expect(single(service!, "CapabilityBoundingSet")).toBe("");
+    expect(single(service!, "AmbientCapabilities")).toBe("");
     expect(single(service!, "ReadOnlyPaths")).toBe("/opt/ludora/codexapi");
     expect(service!.get("InaccessiblePaths")).toEqual([
-      "/opt/ludora/ludora-admin /home/robertorojas87",
+      "/opt/ludora/ludora-admin /home /root",
     ]);
     expect(service!.get("ReadWritePaths")).toEqual(["/var/lib/codexapi"]);
   });

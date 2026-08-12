@@ -2,19 +2,15 @@
 
 `codexapi` is a loopback-only, non-streaming OpenAI-compatible wrapper for one-shot Codex requests. It binds only to `http://127.0.0.1:3001`; do not publish this port through nginx, a firewall rule, or another proxy.
 
-## Constrained runtime
+## Capable isolated runtime
 
-The service runs the package-local platform-native executable from the exact security pin `@openai/codex@0.147.0`. It does not use `PATH`, `CODEX_COMMAND`, command prefixes, profiles, app-server mode, or capability environment toggles.
+The pinned package-local `@openai/codex@0.147.0` CLI starts only after capability attestation succeeds. Its fixed policy is `codexapi-capable-isolated-v2`: live public-web research is available by default, and browser use (external and in-app), image viewing, Code Mode, and the Code Mode host are enabled through the checked-in `codexapi-runtime` profile.
 
-Before it listens, startup runs the same executable with the dedicated workspace, dedicated `CODEX_HOME`, and sanitized child environment used for inference. Startup fails closed unless all of the following hold:
+Shell tools, shell snapshots, and unified execution are disabled. A command-execution event from Codex fails the request closed. Requests inherit an empty MCP inventory, ignore user and project configuration, run ephemerally, and may write only inside a newly created per-request child workspace; that workspace is removed after the request is safe to clean up.
 
-- the CLI reports exactly `codex-cli 0.147.0`;
-- every nonblank `features list` row is unique and well formed, every fixed-disabled feature (including `view_image`) is false, and the only true rows are the five exact `removed` no-op rows recorded in `allowedEnabledFeatures`;
-- `mcp list --json` returns an empty inventory.
+The production unit runs as the dedicated `codexapi` user and group, binds `HOST=127.0.0.1` and `PORT=3001`, and uses `CODEX_HOME=/var/lib/codexapi/home` plus `CODEX_WORKSPACE=/var/lib/codexapi/workspace`. Before Node starts, it installs the checked-in profile into that dedicated home with mode `0400`. The checkout is read-only; `/var/lib/codexapi` is the only writable service path; and the Ludora admin checkout, `/home`, and `/root` are inaccessible to the service.
 
-The `/health` response reports the accepted CLI version, capability policy name (`codexapi-constrained-v1`), and the effective application policy. It never returns command, workspace, or home paths.
-
-Every request uses `codex exec` with a read-only sandbox, `approval_policy="never"`, `mcp_servers={}`, strict config, ignored user/project config, and an ephemeral session. Shell execution, apps, plugins, browser/computer control, code mode, local-image viewing, image generation, multi-agent execution, memories, hooks, tool discovery, plugin sharing, workspace dependencies, and the other fixed disabled features are unavailable. `--disable view_image` disables the host-side local-image tool; trusted, prevalidated request attachments remain a separate explicit `--image` input path. Arbitrary prompts therefore cannot invoke host tools or inherited MCP servers. Web search is off unless the single allowed Responses declaration below opts in.
+`GET /health` reports the accepted CLI version, policy name, and the required and prohibited features. It deliberately does not expose paths, command details, or an exhaustive feature table.
 
 ## Requirements and configuration
 
@@ -30,7 +26,7 @@ Copy `.env.example` and set the two dedicated paths. The service accepts only th
 | `HOST` | `127.0.0.1` | Fixed and enforced loopback bind host |
 | `PORT` | `3001` | Fixed and enforced local API port |
 | `CODEX_HOME` | required | Dedicated Codex home and authentication boundary |
-| `CODEX_WORKSPACE` | required | Empty dedicated inference directory |
+| `CODEX_WORKSPACE` | required | Empty base directory for isolated request workspaces |
 | `CODEX_TIMEOUT_MS` | `120000` | Per-request Codex timeout |
 | `CODEX_DEFAULT_MODEL` | `gpt-5.4-mini` | Model used when callers omit `model` |
 | `CODEX_ALLOWED_MODELS` | bundled allowlist | Accepted request model IDs |
@@ -53,67 +49,49 @@ npm run dev:codex
 
 Streaming is not supported. `stream: true` receives an OpenAI-style `400`.
 
-Models must be in `CODEX_ALLOWED_MODELS`; absent or blank models use `CODEX_DEFAULT_MODEL`. Reasoning effort defaults to `medium` and can be overridden by `reasoning.effort` on Responses or `reasoning_effort` on Chat Completions.
+Models must be in `CODEX_ALLOWED_MODELS`; absent or blank models use `CODEX_DEFAULT_MODEL`. Reasoning effort defaults to `medium` and can be overridden by `reasoning.effort` on Responses or `reasoning_effort` on Chat Completions. Responses `text.format` supports `{ "type": "text" }`, `{ "type": "json_object" }`, and strict `{ "type": "json_schema", "name": "...", "schema": { ... } }`.
 
-Responses `text.format` supports `{ "type": "text" }`, `{ "type": "json_object" }`, and strict `{ "type": "json_schema", "name": "...", "schema": { ... } }`. Schema output is passed through Codex's native output-schema option, validated again locally, and temporary schema files are removed after the command ends.
+## Responses and images
 
-## Responses capability and image contract
+Responses requests use the fixed live-search policy without a `tools` declaration. The legacy single-item `{ "tools": [{ "type": "web_search" }] }` declaration remains accepted for compatibility but does not change the available capability; other tool declarations are rejected. Chat Completions does not accept tools or `tool_choice`.
 
-Responses accepts no tools (web search remains disabled) or exactly this one-item declaration:
+Generic Responses `input_image` compatibility remains supported for one validated public HTTP(S) JPEG, PNG, or WebP image. The server follows limited redirects, enforces a timeout and size limit, passes a verified temporary file to Codex, and removes it afterward. Image failures continue as text-only requests with a bounded diagnostic reason.
 
-```json
-{ "tools": [{ "type": "web_search" }] }
-```
-
-When `tools` is present, no other tool types, additional fields, duplicates, or non-`"auto"` `tool_choice` values are accepted. Chat Completions does not accept tools or `tool_choice` at all.
-
-Responses accepts at most one optional image part, only inside a message-content array:
-
-```json
-{
-  "input": [{
-    "role": "user",
-    "content": [
-      { "type": "input_text", "text": "Find the BGG entry for Coffee Rush." },
-      { "type": "input_image", "image_url": "https://images.example.test/cover.webp", "detail": "high" }
-    ]
-  }]
-}
-```
-
-The image must provide a string `image_url`; `file_id`, a second image, or image-shaped data elsewhere in the request is rejected. The server accepts only public HTTP(S) URLs on ports 80/443, follows at most three redirects, has a 10-second fetch timeout and 8 MiB limit, and requires matching JPEG, PNG, or WebP content type and magic bytes. It passes a verified temporary file to Codex and removes it afterward.
-
-If the image is absent, rejected, unreachable, oversized, or unsupported, the request continues using name/text only. The API records only a bounded diagnostic reason, not image bytes, temporary paths, or URL credentials.
+Ludora BGG matching is separate: it supplies its public `imageUrl` as ordinary prompt text for Codex to open and compare, rather than using `input_image` transport.
 
 ## Examples
 
-Chat Completions:
-
-```bash
-curl http://127.0.0.1:3001/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "gpt-5.4-mini",
-    "messages": [{ "role": "user", "content": "Hello" }]
-  }'
-```
-
-Responses with explicit web search and an optional store image:
+Responses research with no tools declaration (live search is already enabled):
 
 ```bash
 curl http://127.0.0.1:3001/v1/responses \
   -H "Content-Type: application/json" \
   -d '{
     "model": "gpt-5.4-mini",
-    "tools": [{ "type": "web_search" }],
-    "input": [{
-      "role": "user",
-      "content": [
-        { "type": "input_text", "text": "Find the BGG entry for Coffee Rush." },
-        { "type": "input_image", "image_url": "https://images.example.test/cover.webp", "detail": "high" }
-      ]
-    }]
+    "input": "Find the BoardGameGeek entry for Coffee Rush and cite its official page."
   }'
+```
+
+Generic `input_image` compatibility:
+
+```json
+{
+  "input": [{
+    "role": "user",
+    "content": [
+      { "type": "input_text", "text": "Describe this game cover." },
+      { "type": "input_image", "image_url": "https://images.example.test/cover.webp", "detail": "high" }
+    ]
+  }]
+}
+```
+
+BGG matching prompt text:
+
+```json
+{
+  "input": "Match this item to BoardGameGeek. itemName: Coffee Rush; imageUrl: https://images.example.test/cover.webp"
+}
 ```
 
 ## Development
