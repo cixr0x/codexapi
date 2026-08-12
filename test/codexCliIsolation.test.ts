@@ -29,8 +29,6 @@ afterAll(() => {
 
 function runtimeFeatureArgs(): string[] {
   return [
-    "--profile",
-    CODEX_EXECUTION_POLICY.permissionProfile,
     "-c",
     `approval_policy="${CODEX_EXECUTION_POLICY.approvalPolicy}"`,
     "-c",
@@ -65,26 +63,23 @@ describe("pinned Codex CLI isolation", () => {
     expect(result.stdout.trim()).toBe("codex-cli 0.147.0");
   });
 
-  it.skipIf(process.platform === "win32")(
-    "reports required capable features and prohibited shell features under the runtime profile (skipped on Windows because the production profile has POSIX filesystem paths)",
-    () => {
-      assertSafeExecutionConfig({ codexWorkspace: workspace, codexHome });
-      const result = runProbe([...runtimeFeatureArgs(), "features", "list"]);
+  it("reports required capable features and prohibited shell features without loading the runtime profile", () => {
+    assertSafeExecutionConfig({ codexWorkspace: workspace, codexHome });
+    const result = runProbe([...runtimeFeatureArgs(), "features", "list"]);
 
-      expect(result.error).toBeUndefined();
-      expect(result.status, result.stderr).toBe(0);
-      for (const { name, maturity } of CODEX_EXECUTION_POLICY.requiredFeatures) {
-        expect(result.stdout).toMatch(
-          new RegExp(`^${name}\\s+${maturity}\\s+true$`, "m"),
-        );
-      }
-      for (const name of CODEX_EXECUTION_POLICY.disabledFeatures) {
-        expect(result.stdout).toMatch(
-          new RegExp(`^${name}\\s+stable\\s+false$`, "m"),
-        );
-      }
-    },
-  );
+    expect(result.error).toBeUndefined();
+    expect(result.status, result.stderr).toBe(0);
+    for (const { name, maturity } of CODEX_EXECUTION_POLICY.requiredFeatures) {
+      expect(result.stdout).toMatch(
+        new RegExp(`^${name}\\s+${maturity}\\s+true$`, "m"),
+      );
+    }
+    for (const name of CODEX_EXECUTION_POLICY.disabledFeatures) {
+      expect(result.stdout).toMatch(
+        new RegExp(`^${name}\\s+stable\\s+false$`, "m"),
+      );
+    }
+  });
 
   it.skipIf(process.platform === "win32")(
     "has no effective MCP servers in the sanitized dedicated home (skipped on Windows because the production profile has POSIX filesystem paths)",

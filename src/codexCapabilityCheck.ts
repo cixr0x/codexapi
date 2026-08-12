@@ -65,7 +65,7 @@ export async function assertCodexCapabilities(
 
   const featureOutput = await runProbe(
     command.command,
-    [...command.args, ...capabilityPolicyArgs(), "features", "list"],
+    [...command.args, ...featurePolicyArgs(), "features", "list"],
     config,
     "feature",
     spawn,
@@ -74,7 +74,7 @@ export async function assertCodexCapabilities(
 
   const mcpOutput = await runProbe(
     command.command,
-    [...command.args, ...capabilityPolicyArgs(), "mcp", "list", "--json"],
+    [...command.args, ...profileCompatibilityArgs(), "mcp", "list", "--json"],
     config,
     "MCP inventory",
     spawn,
@@ -91,10 +91,8 @@ export async function assertCodexCapabilities(
   };
 }
 
-function capabilityPolicyArgs(): string[] {
+function featurePolicyArgs(): string[] {
   return [
-    "--profile",
-    CODEX_EXECUTION_POLICY.permissionProfile,
     "-c",
     `approval_policy=${tomlString(CODEX_EXECUTION_POLICY.approvalPolicy)}`,
     "-c",
@@ -111,6 +109,14 @@ function capabilityPolicyArgs(): string[] {
     'web_search="live"',
     "-c",
     "tools.web_search=true",
+  ];
+}
+
+function profileCompatibilityArgs(): string[] {
+  return [
+    "--profile",
+    CODEX_EXECUTION_POLICY.permissionProfile,
+    ...featurePolicyArgs(),
   ];
 }
 

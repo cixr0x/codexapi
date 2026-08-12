@@ -148,8 +148,6 @@ describe("Codex capability startup check", () => {
     ]);
     expect(spawn.calls[1]?.[1]).toEqual(
       expect.arrayContaining([
-        "--profile",
-        "codexapi-runtime",
         "--enable",
         "browser_use",
         "--enable",
@@ -164,6 +162,7 @@ describe("Codex capability startup check", () => {
         "list",
       ]),
     );
+    expect(spawn.calls[1]?.[1]).not.toContain("--profile");
     expect(spawn.calls[1]?.[1]).not.toEqual(
       expect.arrayContaining([
         "--ignore-user-config",
