@@ -90,6 +90,7 @@ export interface CodexRunOptions {
   outputSchema?: unknown;
   imagePaths?: readonly string[];
   signal?: AbortSignal;
+  workspaceTag?: string;
 }
 
 export interface CodexCommandDetails {
@@ -165,6 +166,7 @@ export async function runCodexPromptWithDetails(
 
   const requestWorkspace = await (config.requestWorkspaceFactory ?? createRequestWorkspace)(
     config.workspace,
+    options.workspaceTag,
   );
   const cleanupDelay =
     config.requestWorkspaceCleanupDelay ?? waitForRequestWorkspaceCleanupRetry;

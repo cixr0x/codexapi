@@ -1,6 +1,6 @@
 import { lstat, mkdtemp, mkdir, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, relative } from "node:path";
+import { basename, join, relative } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -29,6 +29,17 @@ async function createBase(): Promise<string> {
 }
 
 describe("request workspace", () => {
+  it("creates a contained opaque tagged canary child", async () => {
+    const base = await createBase();
+    const workspace = await createRequestWorkspace(base, "canary-0123456789abcdef0123456789abcdef");
+    expect(basename(workspace.path)).toMatch(/^codexapi-request-canary-[a-f0-9]{32}-/);
+    await workspace.cleanup();
+  });
+
+  it("rejects an unsafe request workspace tag", async () => {
+    await expect(createRequestWorkspace(await createBase(), "../secret")).rejects.toThrow("tag is invalid");
+  });
+
   it("creates unique children under the attested base and removes them idempotently", async () => {
     const base = await createBase();
 

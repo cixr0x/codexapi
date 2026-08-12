@@ -5,6 +5,7 @@ import {
   runIsolationCanary,
   type IsolationCanaryDependencies,
 } from "../src/isolationCanary.js";
+import { isolationCanaryWorkspaceTag } from "../src/isolationCanaryCorrelation.js";
 
 const MARKER_ROOTS = [
   "/opt/ludora/ludora-admin",
@@ -90,7 +91,7 @@ describe("runIsolationCanary", () => {
   });
 
   it("aborts only after one new workspace child, requires AbortError, and restores the empty baseline", async () => {
-    const test = createHarness({ workspaceSnapshots: [[], [], ["request-1"], []] });
+    const test = createHarness({ workspaceSnapshots: [[], [], [taggedChild()], []] });
     await expect(runIsolationCanary(test.dependencies)).resolves.toEqual({
       status: "ok",
       isolation: "verified",
@@ -99,7 +100,7 @@ describe("runIsolationCanary", () => {
   });
 
   it("preserves an existing baseline child while removing only the cancelled request child", async () => {
-    const test = createHarness({ workspaceSnapshots: [["baseline"], ["baseline"], ["baseline", "request-1"], ["baseline"]] });
+    const test = createHarness({ workspaceSnapshots: [["baseline"], ["baseline"], ["baseline", taggedChild()], ["baseline"]] });
     await expect(runIsolationCanary(test.dependencies)).resolves.toEqual({
       status: "ok",
       isolation: "verified",
@@ -109,7 +110,7 @@ describe("runIsolationCanary", () => {
 
   it.each([
     ["normal completion", { cancellationResolves: true }],
-    ["concurrent children", { workspaceSnapshots: [[], [], ["request-1", "concurrent"], []] }],
+    ["concurrent children", { workspaceSnapshots: [[], [], [taggedChild(), "concurrent"], []] }],
   ])("fails instead of falsely passing cancellation after %s", async (_name, options) => {
     await expect(runIsolationCanary(createHarness(options).dependencies)).rejects.toMatchObject({
       message: "Isolation verification failed.",
@@ -122,6 +123,12 @@ describe("runIsolationCanary", () => {
       message: "Isolation verification failed.",
     });
     expect(test.destroySockets).toHaveBeenCalled();
+    expect(test.remove).toHaveBeenCalledTimes(MARKER_ROOTS.length);
+  });
+
+  it("bounds a hostile response body that stalls after headers and cleans owned markers", async () => {
+    const test = createHarness({ hostileBodyHangs: true });
+    await expect(runIsolationCanary(test.dependencies)).rejects.toMatchObject({ message: "Isolation verification failed." });
     expect(test.remove).toHaveBeenCalledTimes(MARKER_ROOTS.length);
   });
 
@@ -150,6 +157,7 @@ function createHarness(options: {
   workspaceSnapshots?: string[][];
   cancellationResolves?: boolean;
   hostileHangs?: boolean;
+  hostileBodyHangs?: boolean;
   serverCloseHangs?: boolean;
 } = {}) {
   const names = ["a", "b", "c", "d", "e", "f", "outside"];
@@ -158,7 +166,7 @@ function createHarness(options: {
   let cancellationAborted = false;
   let nextIdentity = 1;
   const identities = new Map<string, number>();
-  const workspaceSnapshots = options.workspaceSnapshots ?? [[], [], ["request-1"], []];
+  const workspaceSnapshots = options.workspaceSnapshots ?? [[], [], [taggedChild()], []];
   const writeFile = vi.fn(async () => undefined);
   const chown = vi.fn(async () => undefined);
   const chmod = vi.fn(async () => undefined);
@@ -180,6 +188,7 @@ function createHarness(options: {
     if (options.hostileHangs) {
       return new Promise<Response>(() => undefined);
     }
+    if (options.hostileBodyHangs) return { ok: true, text: () => new Promise<string>(() => undefined) } as Response;
     return options.hostileResponse ?? createResponse(allDenied());
   });
   const dependencies: IsolationCanaryDependencies = {
@@ -187,6 +196,7 @@ function createHarness(options: {
     getuid: () => options.uid ?? 0,
     randomToken: () => names.shift() ?? "next",
     randomSecret: () => secrets.shift() ?? "next-secret",
+    randomUuid: () => "123e4567-e89b-42d3-a456-426614174000",
     writeFile,
     chown,
     chmod,
@@ -223,6 +233,10 @@ function createHarness(options: {
     },
   };
   return { dependencies, writeFile, chown, chmod, remove, fetch, destroySockets, get cancellationAborted() { return cancellationAborted; } };
+}
+
+function taggedChild(): string {
+  return `codexapi-request-${isolationCanaryWorkspaceTag("123e4567-e89b-42d3-a456-426614174000", "127.0.0.1")}-random`;
 }
 
 function allDenied(): string {

@@ -8,10 +8,12 @@ export interface RequestWorkspace {
 
 export type RequestWorkspaceFactory = (
   basePath: string,
+  tag?: string,
 ) => Promise<RequestWorkspace>;
 
 export async function createRequestWorkspace(
   basePath: string,
+  tag?: string,
 ): Promise<RequestWorkspace> {
   const resolvedBasePath = resolve(basePath);
   const baseStat = await lstat(resolvedBasePath).catch(() => undefined);
@@ -24,7 +26,8 @@ export async function createRequestWorkspace(
     throw new Error("Codex request workspace base must not resolve through a symbolic link.");
   }
 
-  const path = await mkdtemp(join(canonicalBasePath, "codexapi-request-"));
+  const prefix = tag === undefined ? "codexapi-request-" : `codexapi-request-${validatedTag(tag)}-`;
+  const path = await mkdtemp(join(canonicalBasePath, prefix));
   try {
     const canonicalRequestPath = await realpath(path);
     if (!isDescendant(canonicalBasePath, canonicalRequestPath)) {
@@ -60,6 +63,13 @@ export async function createRequestWorkspace(
     await rm(path, { recursive: true, force: true });
     throw error;
   }
+}
+
+function validatedTag(tag: string): string {
+  if (!/^canary-[a-f0-9]{32}$/.test(tag)) {
+    throw new Error("Codex request workspace tag is invalid.");
+  }
+  return tag;
 }
 
 function isDescendant(basePath: string, candidatePath: string): boolean {

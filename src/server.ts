@@ -39,6 +39,7 @@ import {
   normalizeResponsesRequest,
   openAiError,
 } from "./openaiCompat.js";
+import { ISOLATION_CANARY_HEADER, isolationCanaryWorkspaceTag } from "./isolationCanaryCorrelation.js";
 import {
   emptyPreparedRemoteImage,
   prepareRemoteImage as defaultPrepareRemoteImage,
@@ -209,6 +210,13 @@ export function createServer(options: CreateServerOptions = {}): FastifyInstance
       prompt = normalizedRequest.prompt;
       const format = getResponseTextFormat(request.body);
       const codexOptions = codexOptionsForResponses(request.body, config, format);
+      const canaryHeader = request.headers[ISOLATION_CANARY_HEADER];
+      const canaryId = typeof canaryHeader === "string" ? canaryHeader : undefined;
+      const remoteAddress = request.raw.socket.remoteAddress;
+      if (canaryHeader !== undefined && !isolationCanaryWorkspaceTag(canaryId, remoteAddress)) {
+        throw new Error("Invalid isolation canary request.");
+      }
+      codexOptions.workspaceTag = isolationCanaryWorkspaceTag(canaryId, remoteAddress);
       selectedModel = codexOptions.model ?? config.codexDefaultModel;
       reasoningEffort = codexOptions.reasoningEffort;
       if (normalizedRequest.imageUrl !== null) {
