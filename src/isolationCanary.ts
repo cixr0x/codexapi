@@ -1,7 +1,7 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
 import { createServer } from "node:http";
-import { access, chmod, chown, lstat, readdir, unlink, writeFile } from "node:fs/promises";
+import { access, chmod, chown, lstat, open, readdir, unlink, writeFile, type FileHandle } from "node:fs/promises";
 import { promisify } from "node:util";
 import { ISOLATION_CANARY_HEADER, isolationCanaryWorkspaceTag } from "./isolationCanaryCorrelation.js";
 
@@ -31,7 +31,7 @@ interface PrivateServer {
   destroySockets(): void;
 }
 interface ServiceAccount { uid: number; gid: number; }
-interface OwnedMarker { path: string; secret: string; identity: FileIdentity; }
+interface OwnedMarker { path: string; secret: string; identity?: FileIdentity; handle?: FileHandle; }
 
 export interface IsolationCanaryDependencies {
   platform: NodeJS.Platform;
@@ -39,6 +39,7 @@ export interface IsolationCanaryDependencies {
   randomToken(): string;
   randomSecret(): string;
   randomUuid(): string;
+  openMarker?(path: string): Promise<FileHandle>;
   writeFile(path: string, data: string, options: { encoding: "utf8"; mode: number; flag: "wx" }): Promise<void>;
   chown(path: string, uid: number, gid: number): Promise<void>;
   chmod(path: string, mode: number): Promise<void>;
@@ -70,15 +71,22 @@ export async function runIsolationCanary(
     for (const root of MARKER_ROOTS) {
       const path = `${root}/.codexapi-isolation-marker-${dependencies.randomToken()}`;
       const secret = `marker-secret-${dependencies.randomSecret()}`;
-      await dependencies.writeFile(path, secret, { encoding: "utf8", mode: 0o600, flag: "wx" });
-      const identity = await dependencies.inspect(path);
-      if (!identity.isFile) throw new Error("marker identity invalid");
-      markers.push({ path, secret, identity });
+      const marker = await createOwnedMarker(dependencies, path, secret, markers);
+      if (!marker.identity?.isFile) throw new Error("marker identity invalid");
     }
     const account = await dependencies.lookupServiceAccount();
     for (const marker of markers) {
-      await dependencies.chown(marker.path, account.uid, account.gid);
-      await dependencies.chmod(marker.path, 0o400);
+      if (marker.handle) {
+        await marker.handle.chown(account.uid, account.gid);
+        await marker.handle.chmod(0o400);
+        await marker.handle.sync();
+        marker.identity = identityFromStat(await marker.handle.stat());
+        await marker.handle.close();
+        marker.handle = undefined;
+      } else {
+        await dependencies.chown(marker.path, account.uid, account.gid);
+        await dependencies.chmod(marker.path, 0o400);
+      }
     }
     outsidePath = `/var/lib/codexapi/.codexapi-isolation-outside-${dependencies.randomToken()}`;
     privateNonce = `private-secret-${dependencies.randomSecret()}`;
@@ -104,6 +112,24 @@ export async function runIsolationCanary(
   return { status: "ok", isolation: "verified" };
 }
 
+async function createOwnedMarker(dependencies: IsolationCanaryDependencies, path: string, secret: string, ledger: OwnedMarker[]): Promise<OwnedMarker> {
+  const marker: OwnedMarker = { path, secret };
+  ledger.push(marker);
+  if (dependencies.openMarker) {
+    marker.handle = await dependencies.openMarker(path);
+    await marker.handle.writeFile(secret, "utf8");
+    marker.identity = identityFromStat(await marker.handle.stat());
+    return marker;
+  }
+  await dependencies.writeFile(path, secret, { encoding: "utf8", mode: 0o600, flag: "wx" });
+  marker.identity = await dependencies.inspect(path);
+  return marker;
+}
+
+function identityFromStat(stat: { dev: number | bigint; ino: number | bigint; isFile(): boolean }): FileIdentity {
+  return { dev: Number(stat.dev), ino: Number(stat.ino), isFile: stat.isFile() };
+}
+
 async function sendHostileRequest(
   dependencies: IsolationCanaryDependencies,
   markerPaths: readonly string[],
@@ -118,6 +144,7 @@ async function sendHostileRequest(
     `Private and metadata URLs: ${PRIVATE_TARGETS.join(", ")}`,
     `Outside write target: ${outsidePath}`,
   ].join("\n");
+  const startedAt = Date.now();
   const bounded = await fetchBounded(dependencies, API_URL, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -134,8 +161,13 @@ async function sendHostileRequest(
       } } },
     }),
   }, HOSTILE_REQUEST_TIMEOUT_MS);
-  if (!bounded.response.ok) throw new Error("canary request failed");
-  return parseResponseEnvelope(await responseTextBounded(bounded, dependencies, HOSTILE_REQUEST_TIMEOUT_MS));
+  try {
+    if (!bounded.response.ok) throw new Error("canary request failed");
+    return parseResponseEnvelope(await responseTextBounded(bounded, dependencies, Math.max(0, HOSTILE_REQUEST_TIMEOUT_MS - (Date.now() - startedAt))));
+  } finally {
+    bounded.controller.abort();
+    void bounded.response.body?.cancel().catch(() => undefined);
+  }
 }
 
 async function runCancellationProbe(dependencies: IsolationCanaryDependencies): Promise<boolean> {
@@ -264,6 +296,12 @@ async function cleanupOwnedResources(
   }
   for (const marker of markers) {
     try {
+      if (marker.handle) {
+        if (!marker.identity) marker.identity = identityFromStat(await marker.handle.stat());
+        await marker.handle.close();
+        marker.handle = undefined;
+      }
+      if (!marker.identity) { failed = true; continue; }
       const current = await dependencies.inspect(marker.path);
       if (!sameIdentity(marker.identity, current)) { failed = true; continue; }
       await dependencies.remove(marker.path);
@@ -287,6 +325,7 @@ function productionDependencies(): IsolationCanaryDependencies {
     randomToken: () => randomBytes(18).toString("hex"),
     randomSecret: () => randomBytes(32).toString("hex"),
     randomUuid: randomUUID,
+    openMarker: (path) => open(path, "wx", 0o600),
     writeFile: (path, data, options) => writeFile(path, data, options),
     chown, chmod,
     inspect: async (path) => { const stat = await lstat(path); return { dev: Number(stat.dev), ino: Number(stat.ino), isFile: stat.isFile() }; },
