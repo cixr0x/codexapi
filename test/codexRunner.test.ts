@@ -530,6 +530,67 @@ describe("Codex runner", () => {
     }
   });
 
+  it("retries a transient request workspace cleanup failure after a successful run", async () => {
+    const child = new FakeChildProcess();
+    const requestWorkspace = await createRunnerRequestWorkspace();
+    const cleanupFailure = new Error("transient cleanup failure");
+    requestWorkspace.cleanup.mockRejectedValueOnce(cleanupFailure);
+    const cleanupDelay = vi.fn(async () => undefined);
+    const runner = createCodexRunner({
+      command: "codex",
+      workspace: "C:/workspace",
+      codexHome: TEST_CODEX_HOME,
+      timeoutMs: 1000,
+      spawn: createFakeSpawn(child),
+      requestWorkspaceFactory: requestWorkspace.factory,
+      requestWorkspaceCleanupDelay: cleanupDelay,
+    });
+
+    try {
+      const resultPromise = runner.run("Hello");
+      child.stdout.push(`${jsonlCompletion("OK")}\n`);
+      child.close(0);
+
+      await expect(resultPromise).resolves.toBe("OK");
+      expect(requestWorkspace.cleanup).toHaveBeenCalledTimes(2);
+      expect(cleanupDelay).toHaveBeenCalledOnce();
+      await expect(access(requestWorkspace.path)).rejects.toThrow();
+    } finally {
+      await requestWorkspace.removeRoot();
+    }
+  });
+
+  it("stops normal request workspace cleanup after three failed attempts", async () => {
+    const child = new FakeChildProcess();
+    const requestWorkspace = await createRunnerRequestWorkspace();
+    const sensitivePath = join(requestWorkspace.path, "secret.txt");
+    const cleanupFailure = new Error(`cannot remove ${sensitivePath}`);
+    requestWorkspace.cleanup.mockRejectedValue(cleanupFailure);
+    const cleanupDelay = vi.fn(async () => undefined);
+    const runner = createCodexRunner({
+      command: "codex",
+      workspace: "C:/workspace",
+      codexHome: TEST_CODEX_HOME,
+      timeoutMs: 1000,
+      spawn: createFakeSpawn(child),
+      requestWorkspaceFactory: requestWorkspace.factory,
+      requestWorkspaceCleanupDelay: cleanupDelay,
+    });
+
+    try {
+      const resultPromise = runner.run("Hello");
+      child.stdout.push(`${jsonlCompletion("OK")}\n`);
+      child.close(0);
+
+      await expect(resultPromise).rejects.toBe(cleanupFailure);
+      expect(requestWorkspace.cleanup).toHaveBeenCalledTimes(3);
+      expect(cleanupDelay).toHaveBeenCalledTimes(2);
+      await expect(access(requestWorkspace.path)).resolves.toBeUndefined();
+    } finally {
+      await requestWorkspace.removeRoot();
+    }
+  });
+
   it.each([
     ["nonzero exit", "NON_ZERO_EXIT", (child: FakeChildProcess) => child.close(1)],
     ["spawn failure", "SPAWN_ERROR", (child: FakeChildProcess) => child.fail(new Error("ENOENT"))],
@@ -1268,14 +1329,19 @@ describe("Codex runner", () => {
     }
   });
 
-  it("emits a process warning when deferred request workspace cleanup fails", async () => {
+  it("retries deferred cleanup without starting a duplicate removal", async () => {
     const controller = new AbortController();
     const child = new FakeChildProcess();
     child.kill.mockReturnValue(false);
     const spawn = createFakeSpawn(child);
     const requestWorkspace = await createRunnerRequestWorkspace();
-    const cleanupFailure = new Error("workspace removal failed");
-    requestWorkspace.cleanup.mockRejectedValueOnce(cleanupFailure);
+    let rejectFirstCleanup!: (error: Error) => void;
+    requestWorkspace.cleanup.mockImplementationOnce(
+      () => new Promise<void>((_resolve, reject) => {
+        rejectFirstCleanup = reject;
+      }),
+    );
+    const cleanupDelay = vi.fn(async () => undefined);
     const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
     const runner = createCodexRunner({
       command: "codex",
@@ -1286,6 +1352,7 @@ describe("Codex runner", () => {
       forceTerminationGraceMs: 5,
       spawn,
       requestWorkspaceFactory: requestWorkspace.factory,
+      requestWorkspaceCleanupDelay: cleanupDelay,
     });
 
     try {
@@ -1305,11 +1372,70 @@ describe("Codex runner", () => {
 
       child.close(null);
       await error.cleanupWhenSafe;
+      await waitUntil(() => requestWorkspace.cleanup.mock.calls.length === 1);
+      expect(requestWorkspace.cleanup).toHaveBeenCalledOnce();
+
+      rejectFirstCleanup(new Error("transient workspace removal failure"));
+      await waitUntil(() => requestWorkspace.cleanup.mock.calls.length === 2);
+      await vi.waitFor(async () => {
+        await expect(access(requestWorkspace.path)).rejects.toThrow();
+      });
+      expect(cleanupDelay).toHaveBeenCalledOnce();
+      expect(warning).not.toHaveBeenCalled();
+    } finally {
+      warning.mockRestore();
+      await requestWorkspace.removeRoot();
+    }
+  });
+
+  it("bounds permanent deferred cleanup failure and emits a path-free warning", async () => {
+    const controller = new AbortController();
+    const child = new FakeChildProcess();
+    child.kill.mockReturnValue(false);
+    const spawn = createFakeSpawn(child);
+    const requestWorkspace = await createRunnerRequestWorkspace();
+    const sensitivePath = join(requestWorkspace.path, "private-prompt.txt");
+    requestWorkspace.cleanup.mockRejectedValue(
+      new Error(`cannot remove ${sensitivePath}`),
+    );
+    const cleanupDelay = vi.fn(async () => undefined);
+    const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
+    const runner = createCodexRunner({
+      command: "codex",
+      workspace: "C:/workspace",
+      codexHome: TEST_CODEX_HOME,
+      timeoutMs: 1000,
+      terminationGraceMs: 5,
+      forceTerminationGraceMs: 5,
+      spawn,
+      requestWorkspaceFactory: requestWorkspace.factory,
+      requestWorkspaceCleanupDelay: cleanupDelay,
+    });
+
+    try {
+      const resultPromise = runner.runWithDetails!("Hello", { signal: controller.signal });
+      await waitUntil(() => spawn.mock.calls.length === 1);
+      controller.abort();
+      const error = await resultPromise.then(
+        () => {
+          throw new Error("Expected unverified termination to fail.");
+        },
+        (cause: unknown) => cause,
+      );
+      if (!(error instanceof CodexRunnerError)) {
+        throw error;
+      }
+
+      child.close(null);
+      await error.cleanupWhenSafe;
       await waitUntil(() => warning.mock.calls.length === 1);
+      expect(requestWorkspace.cleanup).toHaveBeenCalledTimes(3);
+      expect(cleanupDelay).toHaveBeenCalledTimes(2);
       expect(warning).toHaveBeenCalledWith(
-        "Codex request workspace cleanup failed: workspace removal failed",
+        "Codex request workspace cleanup failed after bounded retries.",
         { code: "CODEXAPI_REQUEST_WORKSPACE_CLEANUP_FAILED" },
       );
+      expect(JSON.stringify(warning.mock.calls)).not.toContain(sensitivePath);
     } finally {
       warning.mockRestore();
       await requestWorkspace.removeRoot();

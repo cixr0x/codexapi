@@ -5,11 +5,14 @@ import { join } from "node:path";
 import { CODEX_EXECUTION_POLICY } from "./executionPolicy.js";
 import {
   createRequestWorkspace,
+  type RequestWorkspace,
   type RequestWorkspaceFactory,
 } from "./requestWorkspace.js";
 
 const CODE_MODE_DISABLED_WARNING =
   "Code Mode is unavailable because code-mode host is disabled. Code mode will fail closed; enable `features.code_mode_host` and install `codex-code-mode-host`.";
+const REQUEST_WORKSPACE_CLEANUP_ATTEMPTS = 3;
+const REQUEST_WORKSPACE_CLEANUP_RETRY_DELAY_MS = 25;
 
 export type CodexRunnerErrorCode =
   | "NON_ZERO_EXIT"
@@ -65,6 +68,8 @@ export type SpawnFn = (
   options: SpawnOptions,
 ) => ChildProcess;
 
+export type RequestWorkspaceCleanupDelay = (delayMs: number) => Promise<void>;
+
 export interface CodexRunnerConfig {
   command: string;
   commandArgs?: string[];
@@ -76,6 +81,7 @@ export interface CodexRunnerConfig {
   forceTerminationGraceMs?: number;
   spawn?: SpawnFn;
   requestWorkspaceFactory?: RequestWorkspaceFactory;
+  requestWorkspaceCleanupDelay?: RequestWorkspaceCleanupDelay;
 }
 
 export interface CodexRunOptions {
@@ -160,6 +166,8 @@ export async function runCodexPromptWithDetails(
   const requestWorkspace = await (config.requestWorkspaceFactory ?? createRequestWorkspace)(
     config.workspace,
   );
+  const cleanupDelay =
+    config.requestWorkspaceCleanupDelay ?? waitForRequestWorkspaceCleanupRetry;
   let cleanupSafe = true;
 
   try {
@@ -181,15 +189,17 @@ export async function runCodexPromptWithDetails(
     if (error instanceof CodexRunnerError && error.childMayBeRunning) {
       cleanupSafe = false;
       if (error.cleanupWhenSafe) {
-        cleanupAfterSafeSignal(error.cleanupWhenSafe, () =>
-          requestWorkspace.cleanup(),
+        cleanupAfterSafeSignal(
+          error.cleanupWhenSafe,
+          requestWorkspace,
+          cleanupDelay,
         );
       }
     }
     throw error;
   } finally {
     if (cleanupSafe) {
-      await requestWorkspace.cleanup();
+      await cleanupRequestWorkspace(requestWorkspace, cleanupDelay);
     }
   }
 }
@@ -486,15 +496,38 @@ function runCodexProcess(
 
 function cleanupAfterSafeSignal(
   cleanupWhenSafe: Promise<void>,
-  cleanup: () => Promise<void>,
+  requestWorkspace: RequestWorkspace,
+  cleanupDelay: RequestWorkspaceCleanupDelay,
 ): void {
-  void cleanupWhenSafe.then(cleanup).catch((error: unknown) => {
-    const detail = error instanceof Error ? error.message : String(error);
-    process.emitWarning(
-      `Codex request workspace cleanup failed: ${detail}`,
-      { code: "CODEXAPI_REQUEST_WORKSPACE_CLEANUP_FAILED" },
-    );
-  });
+  void cleanupWhenSafe
+    .then(() => cleanupRequestWorkspace(requestWorkspace, cleanupDelay))
+    .catch(() => {
+      process.emitWarning(
+        "Codex request workspace cleanup failed after bounded retries.",
+        { code: "CODEXAPI_REQUEST_WORKSPACE_CLEANUP_FAILED" },
+      );
+    });
+}
+
+async function cleanupRequestWorkspace(
+  requestWorkspace: RequestWorkspace,
+  cleanupDelay: RequestWorkspaceCleanupDelay,
+): Promise<void> {
+  for (let attempt = 1; attempt <= REQUEST_WORKSPACE_CLEANUP_ATTEMPTS; attempt += 1) {
+    try {
+      await requestWorkspace.cleanup();
+      return;
+    } catch (error) {
+      if (attempt === REQUEST_WORKSPACE_CLEANUP_ATTEMPTS) {
+        throw error;
+      }
+      await cleanupDelay(REQUEST_WORKSPACE_CLEANUP_RETRY_DELAY_MS);
+    }
+  }
+}
+
+function waitForRequestWorkspaceCleanupRetry(delayMs: number): Promise<void> {
+  return new Promise((resolveDelay) => setTimeout(resolveDelay, delayMs));
 }
 
 function tryKill(child: ChildProcess, signal: NodeJS.Signals): void {
