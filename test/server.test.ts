@@ -434,6 +434,36 @@ describe("Fastify server", () => {
     await app.close();
   });
 
+  it("logs live research as enabled for a no-tools Chat Completions request", async () => {
+    const logDir = await tempDir();
+    const { runner } = fakeDetailedRunner("Hello from Codex");
+    const app = createServer({
+      config: {
+        ...testConfig(),
+        callLoggingEnabled: true,
+        callLogDir: logDir,
+      },
+      runner,
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/chat/completions",
+      payload: {
+        model: "gpt-5.4-mini",
+        messages: [{ role: "user", content: "Hello" }],
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(JSON.parse(await readFile(join(logDir, "calls.jsonl"), "utf8"))).toMatchObject({
+      endpoint: "/v1/chat/completions",
+      webSearchEnabled: true,
+      statusCode: 200,
+    });
+    await app.close();
+  });
+
   it("returns an OpenAI-style model list", async () => {
     const { runner } = fakeRunner();
     const app = createServer({ config: testConfig(), runner });
