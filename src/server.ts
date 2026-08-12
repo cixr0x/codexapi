@@ -136,7 +136,7 @@ export function createServer(options: CreateServerOptions = {}): FastifyInstance
     let prompt: string | undefined;
     let runResult: CodexRunResult | undefined;
     let selectedModel: string | undefined;
-    let webSearchEnabled = false;
+    const webSearchEnabled = true;
 
     try {
       prompt = buildChatPrompt(request.body);
@@ -197,7 +197,7 @@ export function createServer(options: CreateServerOptions = {}): FastifyInstance
     let outputText: string | undefined;
     let selectedModel: string | undefined;
     let reasoningEffort: string | undefined;
-    let webSearchEnabled = false;
+    const webSearchEnabled = true;
     let imageDiagnosticCode: "none" | SafeImageReason = "none";
     let preparedImage = emptyPreparedRemoteImage();
     let preparedImageCleanupSafe = true;
@@ -208,15 +208,9 @@ export function createServer(options: CreateServerOptions = {}): FastifyInstance
       const normalizedRequest = normalizeResponsesRequest(request.body);
       prompt = normalizedRequest.prompt;
       const format = getResponseTextFormat(request.body);
-      const codexOptions = codexOptionsForResponses(
-        request.body,
-        config,
-        format,
-        normalizedRequest.webSearch,
-      );
+      const codexOptions = codexOptionsForResponses(request.body, config, format);
       selectedModel = codexOptions.model ?? config.codexDefaultModel;
       reasoningEffort = codexOptions.reasoningEffort;
-      webSearchEnabled = normalizedRequest.webSearch;
       if (normalizedRequest.imageUrl !== null) {
         preparedImage = await prepareRemoteImage(normalizedRequest.imageUrl, {
           signal: disconnectSignal,
@@ -476,7 +470,6 @@ function codexOptionsForChat(body: unknown, config: AppConfig): CodexRunOptions 
       "reasoning_effort",
       config,
     ),
-    webSearch: false,
     imagePaths: [],
   };
 }
@@ -485,7 +478,6 @@ function codexOptionsForResponses(
   body: unknown,
   config: AppConfig,
   format: ResponseTextFormat | null,
-  webSearch: boolean,
 ): CodexRunOptions {
   const options: CodexRunOptions = {
     model: selectCodexModel(requestModel(body), config),
@@ -494,7 +486,6 @@ function codexOptionsForResponses(
       "reasoning.effort",
       config,
     ),
-    webSearch,
     imagePaths: [],
   };
   const outputSchema = outputSchemaForFormat(format);
@@ -578,7 +569,6 @@ function hasCodexRunOptions(options: CodexRunOptions): boolean {
     options.model !== undefined ||
     options.reasoningEffort !== undefined ||
     options.outputSchema !== undefined ||
-    options.webSearch !== undefined ||
     options.imagePaths !== undefined ||
     options.signal !== undefined
   );

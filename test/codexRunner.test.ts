@@ -192,7 +192,6 @@ function jsonlCompletion(text: string): string {
 
 function runJsonl(
   rawStdout: string,
-  options: { webSearch?: boolean } = {},
 ): ReturnType<NonNullable<ReturnType<typeof createCodexRunner>["runWithDetails"]>> {
   const child = new FakeChildProcess();
   const runner = createCodexRunner({
@@ -202,9 +201,7 @@ function runJsonl(
     timeoutMs: 1000,
     spawn: createFakeSpawn(child),
   });
-  const result = runner.runWithDetails!("Hello", {
-    webSearch: options.webSearch ?? false,
-  });
+  const result = runner.runWithDetails!("Hello");
   child.stdout.push(`${rawStdout}\n`);
   child.close(0);
   return result;
@@ -416,7 +413,7 @@ describe("Codex runner", () => {
     }
   });
 
-  it("enables native web search regardless of the legacy request option", async () => {
+  it("enables native web search without a request-level option", async () => {
     const child = new FakeChildProcess();
     const spawn = createFakeSpawn(child);
     const runner = createCodexRunner({
@@ -427,26 +424,7 @@ describe("Codex runner", () => {
       spawn,
     });
 
-    const resultPromise = runner.runWithDetails!("Hello", { webSearch: false });
-    child.stdout.push(`${jsonlCompletion("OK")}\n`);
-    child.close(0);
-
-    await expect(resultPromise).resolves.toMatchObject({ stdout: "OK" });
-    expect(spawn.mock.calls[0]?.[1]).toEqual(SAFE_DEFAULT_EXEC_ARGS);
-  });
-
-  it("keeps native web search enabled when the legacy request option is true", async () => {
-    const child = new FakeChildProcess();
-    const spawn = createFakeSpawn(child);
-    const runner = createCodexRunner({
-      command: "codex",
-      workspace: "C:/workspace",
-      codexHome: TEST_CODEX_HOME,
-      timeoutMs: 1000,
-      spawn,
-    });
-
-    const resultPromise = runner.runWithDetails!("Hello", { webSearch: true });
+    const resultPromise = runner.runWithDetails!("Hello");
     child.stdout.push(`${jsonlCompletion("OK")}\n`);
     child.close(0);
 
@@ -696,9 +674,7 @@ describe("Codex runner", () => {
     });
   });
 
-  it.each(["command_execution", "image_view"])(
-    "rejects a forbidden %s item even when a later agent message completes",
-    async (itemType) => {
+  it("rejects command execution even when a later agent message completes", async () => {
       const child = new FakeChildProcess();
       const spawn = createFakeSpawn(child);
       const runner = createCodexRunner({
@@ -713,7 +689,7 @@ describe("Codex runner", () => {
         JSON.stringify({ type: "turn.started" }),
         JSON.stringify({
           type: "item.completed",
-          item: { id: "item-forbidden", type: itemType },
+          item: { id: "item-forbidden", type: "command_execution", command: "whoami" },
         }),
         JSON.stringify({
           type: "item.completed",
@@ -722,93 +698,57 @@ describe("Codex runner", () => {
         JSON.stringify({ type: "turn.completed", usage: VALID_USAGE }),
       ].join("\n");
 
-      const resultPromise = runner.runWithDetails!("Hello", { webSearch: false });
+      const resultPromise = runner.runWithDetails!("Hello");
       child.stdout.push(`${rawStdout}\n`);
       child.close(0);
 
       await expect(resultPromise).rejects.toMatchObject({
         name: "CodexRunnerError",
         code: "INVALID_OUTPUT",
+        message: "Codex JSONL output contained a forbidden command execution item.",
       });
-    },
-  );
-
-  it("accepts a web-search item when the legacy request option is false", async () => {
-    const child = new FakeChildProcess();
-    const spawn = createFakeSpawn(child);
-    const runner = createCodexRunner({
-      command: "codex",
-      workspace: "C:/workspace",
-      codexHome: TEST_CODEX_HOME,
-      timeoutMs: 1000,
-      spawn,
     });
+
+  it("returns only terminal text and usage after completion-only research items", async () => {
     const rawStdout = [
       JSON.stringify({ type: "thread.started", thread_id: "thread-1" }),
       JSON.stringify({ type: "turn.started" }),
       JSON.stringify({
+        type: "item.completed",
+        item: { id: "item-image", type: "image_view", path: "/safe/image.png" },
+      }),
+      JSON.stringify({
         type: "item.started",
-        item: { id: "item-search", type: "web_search", query: "Coffee Rush BGG" },
+        item: { id: "item-browser", type: "web_search", query: "Coffee Rush BGG" },
       }),
       JSON.stringify({
         type: "item.updated",
-        item: { id: "item-search", type: "web_search", query: "Coffee Rush BGG" },
+        item: { id: "item-browser", type: "web_search", query: "Coffee Rush BGG" },
       }),
       JSON.stringify({
         type: "item.completed",
-        item: { id: "item-search", type: "web_search", query: "Coffee Rush BGG" },
+        item: { id: "item-browser", type: "web_search", query: "Coffee Rush BGG" },
       }),
       JSON.stringify({
         type: "item.completed",
-        item: { id: "item-message", type: "agent_message", text: "concealed" },
+        item: { id: "item-metadata", type: "research_summary", citations: [] },
+      }),
+      JSON.stringify({
+        type: "item.completed",
+        item: { id: "item-message", type: "agent_message", text: "research answer" },
       }),
       JSON.stringify({ type: "turn.completed", usage: VALID_USAGE }),
     ].join("\n");
 
-    const resultPromise = runner.runWithDetails!("Hello", { webSearch: false });
-    child.stdout.push(`${rawStdout}\n`);
-    child.close(0);
-
-    await expect(resultPromise).resolves.toMatchObject({ stdout: "concealed" });
-  });
-
-  it("accepts web-search items when the legacy request option is true", async () => {
-    const child = new FakeChildProcess();
-    const spawn = createFakeSpawn(child);
-    const runner = createCodexRunner({
-      command: "codex",
-      workspace: "C:/workspace",
-      codexHome: TEST_CODEX_HOME,
-      timeoutMs: 1000,
-      spawn,
+    await expect(runJsonl(rawStdout)).resolves.toMatchObject({
+      stdout: "research answer",
+      usage: {
+        inputTokens: 21,
+        cachedInputTokens: 8,
+        outputTokens: 5,
+        reasoningOutputTokens: 2,
+      },
     });
-    const rawStdout = [
-      JSON.stringify({ type: "thread.started", thread_id: "thread-1" }),
-      JSON.stringify({ type: "turn.started" }),
-      JSON.stringify({
-        type: "item.started",
-        item: { id: "item-search", type: "web_search", query: "Coffee Rush BGG" },
-      }),
-      JSON.stringify({
-        type: "item.updated",
-        item: { id: "item-search", type: "web_search", query: "Coffee Rush BGG" },
-      }),
-      JSON.stringify({
-        type: "item.completed",
-        item: { id: "item-search", type: "web_search", query: "Coffee Rush BGG" },
-      }),
-      JSON.stringify({
-        type: "item.completed",
-        item: { id: "item-message", type: "agent_message", text: "Coffee Rush" },
-      }),
-      JSON.stringify({ type: "turn.completed", usage: VALID_USAGE }),
-    ].join("\n");
-
-    const resultPromise = runner.runWithDetails!("Hello", { webSearch: true });
-    child.stdout.push(`${rawStdout}\n`);
-    child.close(0);
-
-    await expect(resultPromise).resolves.toMatchObject({ stdout: "Coffee Rush" });
   });
 
   it("accepts the exact pinned pre-turn code-mode-disabled diagnostic without returning it", async () => {
@@ -895,12 +835,6 @@ describe("Codex runner", () => {
       ],
     ],
     [
-      "web-search completion before start",
-      [
-        { type: "item.completed", item: { id: "item-search", type: "web_search" } },
-      ],
-    ],
-    [
       "duplicate web-search start",
       [
         { type: "item.started", item: { id: "item-search", type: "web_search" } },
@@ -913,6 +847,14 @@ describe("Codex runner", () => {
         { type: "item.started", item: { id: "item-search", type: "web_search" } },
         { type: "item.completed", item: { id: "item-search", type: "web_search" } },
         { type: "item.completed", item: { id: "item-search", type: "web_search" } },
+      ],
+    ],
+    [
+      "web-search update after completion",
+      [
+        { type: "item.started", item: { id: "item-search", type: "web_search" } },
+        { type: "item.completed", item: { id: "item-search", type: "web_search" } },
+        { type: "item.updated", item: { id: "item-search", type: "web_search" } },
       ],
     ],
     [
@@ -953,7 +895,7 @@ describe("Codex runner", () => {
       JSON.stringify({ type: "turn.completed", usage: VALID_USAGE }),
     ].join("\n");
 
-    await expect(runJsonl(rawStdout, { webSearch: true })).rejects.toMatchObject({
+    await expect(runJsonl(rawStdout)).rejects.toMatchObject({
       name: "CodexRunnerError",
       code: "INVALID_OUTPUT",
     });

@@ -412,7 +412,7 @@ describe("Fastify server", () => {
     await app.close();
   });
 
-  it("passes the chat completion request model and default reasoning effort to Codex", async () => {
+  it("offers live research by default for Chat Completions without a request-level option", async () => {
     const { runner, runWithDetails } = fakeDetailedRunner("Hello from Codex");
     const app = createServer({ config: testConfig(), runner });
 
@@ -429,7 +429,6 @@ describe("Fastify server", () => {
     expect(runWithDetails).toHaveBeenCalledWith("user: Hello\nassistant:", {
       model: "gpt-5.4-mini",
       reasoningEffort: "medium",
-      webSearch: false,
       imagePaths: [],
     });
     await app.close();
@@ -453,7 +452,7 @@ describe("Fastify server", () => {
     await app.close();
   });
 
-  it("passes the Responses request model and default reasoning effort to Codex", async () => {
+  it("offers live research by default for Responses without a request-level option", async () => {
     const { runner, runWithDetails } = fakeDetailedRunner("Response from Codex");
     const app = createServer({ config: testConfig(), runner });
 
@@ -470,14 +469,13 @@ describe("Fastify server", () => {
     expect(runWithDetails).toHaveBeenCalledWith("input: Hello", {
       model: "gpt-5.5",
       reasoningEffort: "medium",
-      webSearch: false,
       imagePaths: [],
       signal: expect.any(AbortSignal),
     });
     await app.close();
   });
 
-  it("passes the supported Responses web search capability to Codex", async () => {
+  it("keeps the legacy Responses web search declaration as validation-only compatibility syntax", async () => {
     const { runner, runWithDetails } = fakeDetailedRunner("Response from Codex");
     const app = createServer({ config: testConfig(), runner });
 
@@ -495,7 +493,6 @@ describe("Fastify server", () => {
     expect(runWithDetails).toHaveBeenCalledWith("input: Find the current documentation.", {
       model: "gpt-5.5",
       reasoningEffort: "medium",
-      webSearch: true,
       imagePaths: [],
       signal: expect.any(AbortSignal),
     });
@@ -544,7 +541,6 @@ describe("Fastify server", () => {
       {
         model: "gpt-5.5",
         reasoningEffort: "medium",
-        webSearch: false,
         imagePaths: [imagePath],
         signal: expect.any(AbortSignal),
       },
@@ -586,7 +582,6 @@ describe("Fastify server", () => {
     expect(runWithDetails).toHaveBeenCalledWith(expect.stringContaining("Coffee Rush"), {
       model: "gpt-5.5",
       reasoningEffort: "medium",
-      webSearch: false,
       imagePaths: [],
       signal: expect.any(AbortSignal),
     });
@@ -1341,7 +1336,6 @@ describe("Fastify server", () => {
     expect(chat.runWithDetails).toHaveBeenCalledWith("user: Hello\nassistant:", {
       model: "gpt-5.6-sol",
       reasoningEffort: "high",
-      webSearch: false,
       imagePaths: [],
     });
     await chatApp.close();
@@ -1365,7 +1359,6 @@ describe("Fastify server", () => {
     expect(responses.runWithDetails).toHaveBeenCalledWith("input: Hello", {
       model: "gpt-5.6-sol",
       reasoningEffort: "max",
-      webSearch: false,
       imagePaths: [],
       signal: expect.any(AbortSignal),
     });
@@ -1446,7 +1439,6 @@ describe("Fastify server", () => {
     expect(runWithDetails).toHaveBeenCalledWith("input: Hello", {
       model: "gpt-5.4-mini",
       reasoningEffort: "medium",
-      webSearch: false,
       imagePaths: [],
       signal: expect.any(AbortSignal),
     });
@@ -1532,7 +1524,6 @@ describe("Fastify server", () => {
     expect(runWithDetails).toHaveBeenCalledWith("input: Hello", {
       model: "gpt-5.4-mini",
       reasoningEffort: "medium",
-      webSearch: false,
       imagePaths: [],
       signal: expect.any(AbortSignal),
     });
@@ -1545,7 +1536,7 @@ describe("Fastify server", () => {
       endpoint: "/v1/responses",
       method: "POST",
       model: "gpt-5.4-mini",
-      webSearchEnabled: false,
+      webSearchEnabled: true,
       imageDiagnosticCode: "none",
       durationMs: expect.any(Number),
       statusCode: 200,

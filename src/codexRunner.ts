@@ -82,7 +82,6 @@ export interface CodexRunOptions {
   model?: string;
   reasoningEffort?: string;
   outputSchema?: unknown;
-  webSearch?: boolean;
   imagePaths?: readonly string[];
   signal?: AbortSignal;
 }
@@ -120,7 +119,7 @@ interface ParsedCodexOutput {
 }
 
 interface ParsedItemLifecycle {
-  type: "agent_message" | "reasoning" | "web_search" | "error";
+  type: string;
   status: "started" | "completed";
 }
 
@@ -369,7 +368,7 @@ function runCodexProcess(
         }
 
         try {
-          const parsed = parseCodexOutput(rawStdout, true);
+          const parsed = parseCodexOutput(rawStdout);
           resolve({
             stdout: parsed.output,
             rawStdout,
@@ -560,10 +559,7 @@ export function createCodexChildEnvironment(
   return environment;
 }
 
-function parseCodexOutput(
-  rawStdout: string,
-  webSearchAllowed: boolean,
-): ParsedCodexOutput {
+function parseCodexOutput(rawStdout: string): ParsedCodexOutput {
   const messages: string[] = [];
   const items = new Map<string, ParsedItemLifecycle>();
   let usage: CodexUsage | undefined;
@@ -612,7 +608,12 @@ function parseCodexOutput(
       }
       const itemId = event.item.id;
       const itemType = event.item.type;
-      if (typeof itemId !== "string" || !itemId.trim() || typeof itemType !== "string") {
+      if (
+        typeof itemId !== "string" ||
+        !itemId.trim() ||
+        typeof itemType !== "string" ||
+        !itemType.trim()
+      ) {
         throw new Error("Codex JSONL output contained an invalid item event.");
       }
 
@@ -663,23 +664,37 @@ function parseCodexOutput(
         items.set(itemId, { type: "reasoning", status: "completed" });
         continue;
       }
-      if (itemType === "web_search" && webSearchAllowed) {
-        if (event.type === "item.started") {
-          if (existing) {
-            throw new Error("Codex JSONL output contained a duplicate item start.");
-          }
-          items.set(itemId, { type: "web_search", status: "started" });
-          continue;
+      if (itemType === "command_execution") {
+        throw new Error(
+          "Codex JSONL output contained a forbidden command execution item.",
+        );
+      }
+      if (itemType === "error") {
+        throw new Error("Codex JSONL output contained a forbidden item type.");
+      }
+
+      if (event.type === "item.started") {
+        if (existing) {
+          throw new Error("Codex JSONL output contained a duplicate item start.");
         }
+        items.set(itemId, { type: itemType, status: "started" });
+        continue;
+      }
+      if (event.type === "item.updated") {
         if (!existing || existing.status !== "started") {
           throw new Error("Codex JSONL output contained an invalid item lifecycle.");
         }
-        if (event.type === "item.completed") {
-          items.set(itemId, { type: "web_search", status: "completed" });
-        }
         continue;
       }
-      throw new Error("Codex JSONL output contained a forbidden item type.");
+      if (existing) {
+        if (existing.status !== "started") {
+          throw new Error("Codex JSONL output contained a duplicate item completion.");
+        }
+        items.set(itemId, { type: itemType, status: "completed" });
+        continue;
+      }
+      items.set(itemId, { type: itemType, status: "completed" });
+      continue;
     }
 
     if (event.type === "turn.completed") {

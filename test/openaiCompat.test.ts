@@ -24,18 +24,16 @@ const responseSchema = {
 
 describe("OpenAI compatibility mapping", () => {
   it.each([
-    ["absent tools", { input: "Hello" }, false],
-    ["an empty tools array", { input: "Hello", tools: [] }, false],
-    ["one web search tool", { input: "Hello", tools: [{ type: "web_search" }] }, true],
+    ["absent tools", { input: "Hello" }],
+    ["an empty tools array", { input: "Hello", tools: [] }],
+    ["one web search tool", { input: "Hello", tools: [{ type: "web_search" }] }],
     [
       "one web search tool with auto choice",
       { input: "Hello", tools: [{ type: "web_search" }], tool_choice: "auto" },
-      true,
     ],
-  ])("normalizes Responses requests with %s", (_name, body, webSearch) => {
+  ])("validates Responses requests with %s without changing default research", (_name, body) => {
     expect(normalizeResponsesRequest(body)).toEqual({
       prompt: "input: Hello",
-      webSearch,
       imageUrl: null,
     });
   });
@@ -181,7 +179,6 @@ describe("OpenAI compatibility mapping", () => {
         "[store cover attached when available]",
         `image_url: ${imageUrl}`,
       ].join("\n"),
-      webSearch: false,
       imageUrl,
     });
     expect(normalized.prompt).not.toContain("[input_image]");
@@ -225,7 +222,6 @@ describe("OpenAI compatibility mapping", () => {
     const normalized = normalizeResponsesRequest(request);
 
     expect(normalized).toMatchObject({
-      webSearch: false,
       imageUrl: null,
     });
     expect(normalized.prompt).toHaveLength(BROAD_INPUT_ITEM_COUNT * 9 - 1);

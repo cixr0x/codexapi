@@ -101,7 +101,6 @@ export function buildResponsesPrompt(body: unknown): string {
 
 export interface NormalizedResponsesRequest {
   prompt: string;
-  webSearch: boolean;
   imageUrl: string | null;
 }
 
@@ -109,7 +108,7 @@ export function normalizeResponsesRequest(body: unknown): NormalizedResponsesReq
   const request = requireRecord(body, "Request body must be a JSON object.");
   const inputImage = validateResponsesInputImage(request);
   rejectStreaming(request);
-  const webSearch = parseWebSearch(request);
+  validateWebSearchDeclaration(request);
 
   if (!Object.prototype.hasOwnProperty.call(request, "input")) {
     throw openAiError(
@@ -136,7 +135,6 @@ export function normalizeResponsesRequest(body: unknown): NormalizedResponsesReq
 
   return {
     prompt: lines.join("\n"),
-    webSearch,
     imageUrl: formattedInput.imageUrl,
   };
 }
@@ -288,7 +286,7 @@ function rejectChatTools(request: JsonRecord): void {
   }
 }
 
-function parseWebSearch(body: JsonRecord): boolean {
+function validateWebSearchDeclaration(body: JsonRecord): void {
   if (body.tool_choice !== undefined && body.tool_choice !== "auto") {
     throw openAiError(
       'tool_choice must be "auto".',
@@ -298,7 +296,7 @@ function parseWebSearch(body: JsonRecord): boolean {
   }
 
   if (body.tools === undefined || (Array.isArray(body.tools) && body.tools.length === 0)) {
-    return false;
+    return;
   }
 
   if (
@@ -315,7 +313,6 @@ function parseWebSearch(body: JsonRecord): boolean {
     );
   }
 
-  return true;
 }
 
 function formatResponseInput(
