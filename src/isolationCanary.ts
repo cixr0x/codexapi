@@ -1,7 +1,7 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
 import { createServer } from "node:http";
-import { access, chmod, chown, lstat, open, readdir, unlink, writeFile, type FileHandle } from "node:fs/promises";
+import { access, lstat, mkdir, open, readdir, rmdir, unlink } from "node:fs/promises";
 import { promisify } from "node:util";
 import { ISOLATION_CANARY_HEADER, isolationCanaryWorkspaceTag } from "./isolationCanaryCorrelation.js";
 
@@ -23,7 +23,16 @@ export class IsolationCanaryError extends Error {
   constructor(message: string) { super(message); this.name = "IsolationCanaryError"; }
 }
 
-interface FileIdentity { dev: number; ino: number; isFile: boolean; }
+interface DirectoryIdentity { dev: number; ino: number; isDirectory: boolean; uid: number; gid: number; mode: number; }
+interface FileIdentity { dev: number; ino: number; isFile: boolean; nlink: number; }
+interface MarkerHandle {
+  writeFile(data: string, encoding: "utf8"): Promise<void>;
+  chown(uid: number, gid: number): Promise<void>;
+  chmod(mode: number): Promise<void>;
+  sync(): Promise<void>;
+  stat(): Promise<{ dev: number | bigint; ino: number | bigint; nlink: number | bigint; isFile(): boolean }>;
+  close(): Promise<void>;
+}
 interface PrivateServer {
   readonly url: string;
   getHits(): number;
@@ -31,7 +40,7 @@ interface PrivateServer {
   destroySockets(): void;
 }
 interface ServiceAccount { uid: number; gid: number; }
-interface OwnedMarker { path: string; secret: string; identity?: FileIdentity; handle?: FileHandle; }
+interface OwnedMarker { directoryPath: string; path: string; secret: string; directoryIdentity?: DirectoryIdentity; identity?: FileIdentity; handle?: MarkerHandle; markerOpened?: boolean; }
 
 export interface IsolationCanaryDependencies {
   platform: NodeJS.Platform;
@@ -39,11 +48,13 @@ export interface IsolationCanaryDependencies {
   randomToken(): string;
   randomSecret(): string;
   randomUuid(): string;
-  openMarker?(path: string): Promise<FileHandle>;
-  writeFile(path: string, data: string, options: { encoding: "utf8"; mode: number; flag: "wx" }): Promise<void>;
-  chown(path: string, uid: number, gid: number): Promise<void>;
-  chmod(path: string, mode: number): Promise<void>;
-  inspect(path: string): Promise<FileIdentity>;
+  markerRoots?: readonly string[];
+  workspaceBase?: string;
+  makeDirectory(path: string, options: { mode: number }): Promise<void>;
+  removeDirectory(path: string): Promise<void>;
+  openMarker(path: string): Promise<MarkerHandle>;
+  inspectDirectory(path: string): Promise<DirectoryIdentity>;
+  inspectMarker(path: string): Promise<FileIdentity>;
   remove(path: string): Promise<void>;
   exists(path: string): Promise<boolean>;
   readDir(path: string): Promise<string[]>;
@@ -68,26 +79,17 @@ export async function runIsolationCanary(
   let privateServer: PrivateServer | undefined;
   let failed = false;
   try {
-    for (const root of MARKER_ROOTS) {
-      const path = `${root}/.codexapi-isolation-marker-${dependencies.randomToken()}`;
+    const account = await dependencies.lookupServiceAccount();
+    for (const root of dependencies.markerRoots ?? MARKER_ROOTS) {
+      const directoryPath = `${root}/.codexapi-isolation-canary-${dependencies.randomToken()}`;
+      const path = `${directoryPath}/marker`;
       const secret = `marker-secret-${dependencies.randomSecret()}`;
-      const marker = await createOwnedMarker(dependencies, path, secret, markers);
+      const marker = await createOwnedMarker(dependencies, directoryPath, path, secret, account, markers);
       if (!marker.identity?.isFile) throw new Error("marker identity invalid");
     }
-    const account = await dependencies.lookupServiceAccount();
-    for (const marker of markers) {
-      if (marker.handle) {
-        await marker.handle.chown(account.uid, account.gid);
-        await marker.handle.chmod(0o400);
-        await marker.handle.sync();
-        marker.identity = identityFromStat(await marker.handle.stat());
-        await marker.handle.close();
-        marker.handle = undefined;
-      } else {
-        await dependencies.chown(marker.path, account.uid, account.gid);
-        await dependencies.chmod(marker.path, 0o400);
-      }
-    }
+    let markerCloseFailed = false;
+    for (const marker of markers) if (!(await closeMarkerHandle(marker, dependencies))) markerCloseFailed = true;
+    if (markerCloseFailed) throw new Error("marker close failed");
     outsidePath = `/var/lib/codexapi/.codexapi-isolation-outside-${dependencies.randomToken()}`;
     privateNonce = `private-secret-${dependencies.randomSecret()}`;
     privateServer = await dependencies.startPrivateServer(privateNonce);
@@ -112,22 +114,32 @@ export async function runIsolationCanary(
   return { status: "ok", isolation: "verified" };
 }
 
-async function createOwnedMarker(dependencies: IsolationCanaryDependencies, path: string, secret: string, ledger: OwnedMarker[]): Promise<OwnedMarker> {
-  const marker: OwnedMarker = { path, secret };
+async function createOwnedMarker(
+  dependencies: IsolationCanaryDependencies,
+  directoryPath: string,
+  path: string,
+  secret: string,
+  account: ServiceAccount,
+  ledger: OwnedMarker[],
+): Promise<OwnedMarker> {
+  const marker: OwnedMarker = { directoryPath, path, secret };
   ledger.push(marker);
-  if (dependencies.openMarker) {
-    marker.handle = await dependencies.openMarker(path);
-    await marker.handle.writeFile(secret, "utf8");
-    marker.identity = identityFromStat(await marker.handle.stat());
-    return marker;
-  }
-  await dependencies.writeFile(path, secret, { encoding: "utf8", mode: 0o600, flag: "wx" });
-  marker.identity = await dependencies.inspect(path);
+  await dependencies.makeDirectory(directoryPath, { mode: 0o711 });
+  marker.directoryIdentity = await dependencies.inspectDirectory(directoryPath);
+  if (!isOwnedMarkerDirectory(marker.directoryIdentity)) throw new Error("marker directory identity invalid");
+  marker.handle = await dependencies.openMarker(path);
+  marker.markerOpened = true;
+  await marker.handle.writeFile(secret, "utf8");
+  await marker.handle.chown(account.uid, account.gid);
+  await marker.handle.chmod(0o400);
+  await marker.handle.sync();
+  marker.identity = identityFromStat(await marker.handle.stat());
+  if (!isOwnedMarker(marker.identity)) throw new Error("marker identity invalid");
   return marker;
 }
 
-function identityFromStat(stat: { dev: number | bigint; ino: number | bigint; isFile(): boolean }): FileIdentity {
-  return { dev: Number(stat.dev), ino: Number(stat.ino), isFile: stat.isFile() };
+function identityFromStat(stat: { dev: number | bigint; ino: number | bigint; nlink: number | bigint; isFile(): boolean }): FileIdentity {
+  return { dev: Number(stat.dev), ino: Number(stat.ino), nlink: Number(stat.nlink), isFile: stat.isFile() };
 }
 
 async function sendHostileRequest(
@@ -171,23 +183,34 @@ async function sendHostileRequest(
 }
 
 async function runCancellationProbe(dependencies: IsolationCanaryDependencies): Promise<boolean> {
-  const baseline = await dependencies.readDir(WORKSPACE_BASE);
-  const canaryId = dependencies.randomUuid();
-  const tag = isolationCanaryWorkspaceTag(canaryId, "127.0.0.1");
-  if (!tag) return false;
+  let pending: Promise<Response> | undefined;
+  let baseline: readonly string[] = [];
+  let childKnown = false;
+  let passed = false;
   const controller = new AbortController();
-  const pending = dependencies.fetch(API_URL, {
-    method: "POST", headers: { "content-type": "application/json", [ISOLATION_CANARY_HEADER]: canaryId }, signal: controller.signal,
-    body: JSON.stringify({ input: "Conduct an extensive public-web research investigation and provide a detailed source-backed report." }),
-  });
-  const child = await waitForTaggedChild(dependencies, baseline, tag);
-  if (!child) {
-    controller.abort();
-    await waitForAbort(pending, dependencies);
-    return false;
+  try {
+    baseline = await dependencies.readDir(dependencies.workspaceBase ?? WORKSPACE_BASE);
+    const canaryId = dependencies.randomUuid();
+    const tag = isolationCanaryWorkspaceTag(canaryId, "127.0.0.1");
+    if (!tag) return false;
+    pending = dependencies.fetch(API_URL, {
+      method: "POST", headers: { "content-type": "application/json", [ISOLATION_CANARY_HEADER]: canaryId }, signal: controller.signal,
+      body: JSON.stringify({ input: "Conduct an extensive public-web research investigation and provide a detailed source-backed report." }),
+    });
+    void pending.then(() => undefined, () => undefined);
+    const child = await waitForTaggedChild(dependencies, baseline, tag);
+    childKnown = Boolean(child);
+    passed = childKnown;
+  } catch {
+    passed = false;
+  } finally {
+    if (pending) {
+      controller.abort();
+      passed &&= await waitForAbort(pending, dependencies);
+      if (childKnown) passed &&= await waitForWorkspaceBaseline(dependencies, baseline);
+    }
   }
-  controller.abort();
-  return (await waitForAbort(pending, dependencies)) && await waitForWorkspaceBaseline(dependencies, baseline);
+  return passed;
 }
 
 async function waitForTaggedChild(
@@ -196,7 +219,7 @@ async function waitForTaggedChild(
 ): Promise<string | undefined> {
   const baselineSet = new Set(baseline);
   for (let elapsed = 0; elapsed < CANCELLATION_BOUND_MS; elapsed += 100) {
-    const current = await dependencies.readDir(WORKSPACE_BASE);
+    const current = await dependencies.readDir(dependencies.workspaceBase ?? WORKSPACE_BASE);
     const additions = current.filter((name) => !baselineSet.has(name));
     const tagged = additions.filter((name) => name.startsWith(`codexapi-request-${tag}-`));
     if (tagged.length > 0) {
@@ -213,7 +236,7 @@ async function waitForWorkspaceBaseline(
 ): Promise<boolean> {
   const expected = [...baseline].sort();
   for (let elapsed = 0; elapsed < CANCELLATION_BOUND_MS; elapsed += 100) {
-    const current = [...await dependencies.readDir(WORKSPACE_BASE)].sort();
+    const current = [...await dependencies.readDir(dependencies.workspaceBase ?? WORKSPACE_BASE)].sort();
     if (current.length === expected.length && current.every((name, index) => name === expected[index])) return true;
     await dependencies.sleep(100);
   }
@@ -296,22 +319,55 @@ async function cleanupOwnedResources(
   }
   for (const marker of markers) {
     try {
-      if (marker.handle) {
-        if (!marker.identity) marker.identity = identityFromStat(await marker.handle.stat());
-        await marker.handle.close();
-        marker.handle = undefined;
+      if (!(await closeMarkerHandle(marker, dependencies))) { failed = true; continue; }
+      if (!marker.directoryIdentity) { failed = true; continue; }
+      if (!marker.identity) {
+        if (!marker.markerOpened && sameDirectoryIdentity(marker.directoryIdentity, await dependencies.inspectDirectory(marker.directoryPath))) {
+          await dependencies.removeDirectory(marker.directoryPath);
+        } else {
+          failed = true;
+        }
+        continue;
       }
-      if (!marker.identity) { failed = true; continue; }
-      const current = await dependencies.inspect(marker.path);
-      if (!sameIdentity(marker.identity, current)) { failed = true; continue; }
+      const currentDirectory = await dependencies.inspectDirectory(marker.directoryPath);
+      const currentMarker = await dependencies.inspectMarker(marker.path);
+      if (!sameDirectoryIdentity(marker.directoryIdentity, currentDirectory) || !sameIdentity(marker.identity, currentMarker)) { failed = true; continue; }
       await dependencies.remove(marker.path);
+      await dependencies.removeDirectory(marker.directoryPath);
     } catch { failed = true; }
   }
   return failed;
 }
 
 function sameIdentity(expected: FileIdentity, current: FileIdentity): boolean {
-  return expected.isFile && current.isFile && expected.dev === current.dev && expected.ino === current.ino;
+  return expected.isFile && current.isFile && expected.nlink === 1 && current.nlink === 1 && expected.dev === current.dev && expected.ino === current.ino;
+}
+
+function sameDirectoryIdentity(expected: DirectoryIdentity, current: DirectoryIdentity): boolean {
+  return expected.isDirectory && current.isDirectory && expected.uid === 0 && expected.gid === 0 && expected.mode === 0o711
+    && current.uid === 0 && current.gid === 0 && current.mode === 0o711 && expected.dev === current.dev && expected.ino === current.ino;
+}
+
+function isOwnedMarkerDirectory(identity: DirectoryIdentity): boolean {
+  return sameDirectoryIdentity(identity, identity);
+}
+
+function isOwnedMarker(identity: FileIdentity): boolean {
+  return identity.isFile && identity.nlink === 1;
+}
+
+async function closeMarkerHandle(marker: OwnedMarker, dependencies: IsolationCanaryDependencies): Promise<boolean> {
+  if (!marker.handle) return true;
+  const handle = marker.handle;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      if (await settleWithin(handle.close(), dependencies, PRIVATE_SERVER_CLOSE_GRACE_MS)) {
+        marker.handle = undefined;
+        return true;
+      }
+    } catch { /* the next bounded close attempt is the only safe recovery */ }
+  }
+  return false;
 }
 
 async function settleWithin(operation: Promise<void>, dependencies: IsolationCanaryDependencies, timeoutMs: number): Promise<boolean> {
@@ -325,10 +381,11 @@ function productionDependencies(): IsolationCanaryDependencies {
     randomToken: () => randomBytes(18).toString("hex"),
     randomSecret: () => randomBytes(32).toString("hex"),
     randomUuid: randomUUID,
+    makeDirectory: (path, options) => mkdir(path, options),
+    removeDirectory: rmdir,
     openMarker: (path) => open(path, "wx", 0o600),
-    writeFile: (path, data, options) => writeFile(path, data, options),
-    chown, chmod,
-    inspect: async (path) => { const stat = await lstat(path); return { dev: Number(stat.dev), ino: Number(stat.ino), isFile: stat.isFile() }; },
+    inspectDirectory: async (path) => directoryIdentityFromStat(await lstat(path)),
+    inspectMarker: async (path) => identityFromStat(await lstat(path)),
     remove: unlink,
     exists: async (path) => access(path).then(() => true, () => false),
     readDir: readdir,
@@ -337,6 +394,10 @@ function productionDependencies(): IsolationCanaryDependencies {
     fetch: globalThis.fetch,
     sleep: (delayMs) => new Promise((resolve) => setTimeout(resolve, delayMs)),
   };
+}
+
+function directoryIdentityFromStat(stat: { dev: number | bigint; ino: number | bigint; uid: number; gid: number; mode: number; isDirectory(): boolean }): DirectoryIdentity {
+  return { dev: Number(stat.dev), ino: Number(stat.ino), uid: stat.uid, gid: stat.gid, mode: stat.mode & 0o7777, isDirectory: stat.isDirectory() };
 }
 
 async function lookupServiceAccount(): Promise<ServiceAccount> {
