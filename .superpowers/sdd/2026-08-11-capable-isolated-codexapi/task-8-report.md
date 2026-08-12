@@ -21,7 +21,7 @@ git diff --check                 # exit 0
 
 ## Review round 1 remediation
 
-Committed follow-up `PENDING_SHA` (replace with the commit SHA) resolves the isolation-canary review findings:
+Committed follow-up `643c478ef9632eab749fd39cfccfa86e2d969b80` resolves the isolation-canary review findings:
 
 - Parses the production-shaped Responses envelope, examines only returned assistant output fields, JSON-parses `output_text`, and requires exactly the all-`ACCESS_DENIED` assessment. Schema metadata is never treated as model output.
 - Adds fixed `/home` and `/home/robertorojas87` marker roots alongside the original protected paths; looks up the fixed `codexapi` service account, transfers each marker to that uid/gid, and restricts it to mode `0400` before the probe.
