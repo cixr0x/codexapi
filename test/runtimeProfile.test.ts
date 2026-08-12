@@ -23,6 +23,7 @@ describe("CodexAPI capable runtime profile", () => {
   it("defines the fixed capable-isolated runtime boundary", () => {
     expect(profile).toContain('default_permissions = "codexapi-runtime"');
     expect(profile).toContain('web_search = "live"');
+    expect(profile).toContain("suppress_unstable_features_warning = true");
     expect(profile).toContain("view_image = true");
     expect(profile).toContain('"/opt/ludora/ludora-admin" = "deny"');
     expect(profile).toContain('"/var/lib/codexapi/home" = "deny"');

@@ -1,5 +1,6 @@
 default_permissions = "codexapi-runtime"
 web_search = "live"
+suppress_unstable_features_warning = true
 
 [tools]
 web_search = true

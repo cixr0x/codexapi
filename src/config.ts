@@ -5,6 +5,7 @@ import { dirname, isAbsolute, join, relative } from "node:path";
 import { assertSafeExecutionConfig } from "./executionPolicy.js";
 
 export type CodexBackend = "exec";
+export const DEFAULT_CODEX_TIMEOUT_MS = 120_000;
 export const CODEX_REASONING_EFFORTS = [
   "low",
   "medium",
@@ -56,7 +57,11 @@ export function loadConfig(
     codexBackend: parseCodexBackend(env.CODEX_BACKEND),
     codexWorkspace: env.CODEX_WORKSPACE ?? "",
     codexHome: env.CODEX_HOME ?? "",
-    codexTimeoutMs: parseInteger(env.CODEX_TIMEOUT_MS, 120000, "CODEX_TIMEOUT_MS"),
+    codexTimeoutMs: parseInteger(
+      env.CODEX_TIMEOUT_MS,
+      DEFAULT_CODEX_TIMEOUT_MS,
+      "CODEX_TIMEOUT_MS",
+    ),
     codexDefaultModel: parseString(env.CODEX_DEFAULT_MODEL, "gpt-5.4-mini"),
     codexAllowedModels: parseList(env.CODEX_ALLOWED_MODELS, [
       "gpt-5.6-sol",

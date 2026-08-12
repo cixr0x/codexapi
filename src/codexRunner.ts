@@ -11,6 +11,8 @@ import {
 
 const CODE_MODE_DISABLED_WARNING =
   "Code Mode is unavailable because code-mode host is disabled. Code mode will fail closed; enable `features.code_mode_host` and install `codex-code-mode-host`.";
+const UNSTABLE_FEATURES_WARNING =
+  "Under-development features enabled: code_mode. Under-development features are incomplete and may behave unpredictably. To suppress this warning, set `suppress_unstable_features_warning = true` in /var/lib/codexapi/home/config.toml.";
 const REQUEST_WORKSPACE_CLEANUP_ATTEMPTS = 3;
 const REQUEST_WORKSPACE_CLEANUP_RETRY_DELAY_MS = 25;
 
@@ -380,7 +382,7 @@ function runCodexProcess(
         }
 
         try {
-          const parsed = parseCodexOutput(rawStdout);
+          const parsed = parseCodexOutput(rawStdout, model);
           resolve({
             stdout: parsed.output,
             rawStdout,
@@ -594,12 +596,15 @@ export function createCodexChildEnvironment(
   return environment;
 }
 
-function parseCodexOutput(rawStdout: string): ParsedCodexOutput {
+function parseCodexOutput(
+  rawStdout: string,
+  model: string | undefined,
+): ParsedCodexOutput {
   const messages: string[] = [];
   const items = new Map<string, ParsedItemLifecycle>();
   let usage: CodexUsage | undefined;
   let phase: "thread" | "turn" | "active" | "completed" = "thread";
-  let codeModeDisabledWarningSeen = false;
+  let preTurnWarningState: PreTurnWarningState = "none";
 
   for (const line of rawStdout.split(/\r?\n/)) {
     if (!line.trim()) {
@@ -658,16 +663,21 @@ function parseCodexOutput(rawStdout: string): ParsedCodexOutput {
       }
 
       if (phase === "turn") {
+        const nextWarningState: PreTurnWarningState | undefined =
+          event.type === "item.completed" && itemType === "error"
+            ? acceptPreTurnWarning(
+                preTurnWarningState,
+                event.item.message,
+                model,
+              )
+            : undefined;
         if (
-          codeModeDisabledWarningSeen ||
           existing ||
-          event.type !== "item.completed" ||
-          itemType !== "error" ||
-          event.item.message !== CODE_MODE_DISABLED_WARNING
+          nextWarningState === undefined
         ) {
           throw new Error("Codex JSONL output contained an invalid pre-turn item.");
         }
-        codeModeDisabledWarningSeen = true;
+        preTurnWarningState = nextWarningState;
         items.set(itemId, { type: "error", status: "completed" });
         continue;
       }
@@ -762,6 +772,33 @@ function parseCodexOutput(rawStdout: string): ParsedCodexOutput {
   }
 
   return { output: output.trimEnd(), usage };
+}
+
+type PreTurnWarningState = "none" | "unstable" | "unsupported" | "disabled";
+
+function acceptPreTurnWarning(
+  state: PreTurnWarningState,
+  message: unknown,
+  model: string | undefined,
+): PreTurnWarningState | undefined {
+  if (state === "none" && message === CODE_MODE_DISABLED_WARNING) {
+    return "disabled";
+  }
+  if (state === "none" && message === UNSTABLE_FEATURES_WARNING) {
+    return "unstable";
+  }
+  if (
+    (state === "none" || state === "unstable") &&
+    model !== undefined &&
+    message === unsupportedCodeModeWarning(model)
+  ) {
+    return "unsupported";
+  }
+  return undefined;
+}
+
+function unsupportedCodeModeWarning(model: string): string {
+  return `Code Mode is enabled in configuration, but model \`${model}\` does not advertise Code Mode support. This may degrade model performance. Disable \`features.code_mode\` and \`features.code_mode_only\`, or select a model whose metadata enables Code Mode.`;
 }
 
 function parseRecord(line: string): Record<string, unknown> | undefined {

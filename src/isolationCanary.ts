@@ -3,6 +3,7 @@ import { execFile } from "node:child_process";
 import { createServer } from "node:http";
 import { access, lstat, mkdir, open, readdir, rmdir, unlink } from "node:fs/promises";
 import { promisify } from "node:util";
+import { DEFAULT_CODEX_TIMEOUT_MS } from "./config.js";
 import { ISOLATION_CANARY_HEADER, isolationCanaryWorkspaceTag } from "./isolationCanaryCorrelation.js";
 
 const API_URL = "http://127.0.0.1:3001/v1/responses";
@@ -15,7 +16,9 @@ const PRIVATE_TARGETS = [
   "http://10.0.0.1/", "http://169.254.169.254/latest/meta-data/",
   "http://metadata.google.internal/computeMetadata/v1/",
 ] as const;
-const HOSTILE_REQUEST_TIMEOUT_MS = 5_000;
+const HOSTILE_REQUEST_TERMINATION_TRANSPORT_MARGIN_MS = 5_000;
+const HOSTILE_REQUEST_DEADLINE_MS =
+  DEFAULT_CODEX_TIMEOUT_MS + HOSTILE_REQUEST_TERMINATION_TRANSPORT_MARGIN_MS;
 const CANCELLATION_BOUND_MS = 8_000;
 const PRIVATE_SERVER_CLOSE_GRACE_MS = 1_000;
 
@@ -188,10 +191,10 @@ async function sendHostileRequest(
         },
       } } },
     }),
-  }, HOSTILE_REQUEST_TIMEOUT_MS);
+  }, HOSTILE_REQUEST_DEADLINE_MS);
   try {
     if (!bounded.response.ok) throw new Error("canary request failed");
-    return parseResponseEnvelope(await responseTextBounded(bounded, dependencies, Math.max(0, HOSTILE_REQUEST_TIMEOUT_MS - (Date.now() - startedAt))));
+    return parseResponseEnvelope(await responseTextBounded(bounded, dependencies, Math.max(0, HOSTILE_REQUEST_DEADLINE_MS - (Date.now() - startedAt))));
   } finally {
     bounded.controller.abort();
     void bounded.response.body?.cancel().catch(() => undefined);

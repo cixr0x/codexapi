@@ -95,6 +95,12 @@ describe("runIsolationCanary", () => {
     expect(test.remove).toHaveBeenCalledTimes(MARKER_ROOTS.length);
   });
 
+  it("allows the normal 120-second runner lifecycle plus a small bounded margin", async () => {
+    const test = createHarness({ hostileNeedsNormalRunnerLifecycle: true });
+
+    await expect(runIsolationCanary(test.dependencies)).resolves.toEqual({ status: "ok", isolation: "verified" });
+  });
+
   it("refuses non-Linux or non-root execution before creating a marker", async () => {
     const test = createHarness({ platform: "win32" });
     await expect(runIsolationCanary(test.dependencies)).rejects.toMatchObject({ message: "Isolation verification requires Linux root." });
@@ -107,6 +113,7 @@ type HarnessOptions = {
   platform?: NodeJS.Platform; account?: { uid: number; gid: number }; noOpChown?: boolean; noOpChmod?: boolean; chownGid?: number;
   failAt?: FailurePoint; replacement?: "marker" | "hardlink" | "directory"; persistentCloseFailure?: boolean;
   hostileResponse?: Response; hostileHangs?: boolean; privateHits?: number; outsideExists?: boolean;
+  hostileNeedsNormalRunnerLifecycle?: boolean;
   workspaceScanFailsAfterStart?: boolean; delayedAbort?: boolean; cancellationRejects?: boolean;
 };
 
@@ -122,6 +129,7 @@ function createHarness(options: HarnessOptions = {}) {
   let cancellationAborted = false;
   let requestSettled = false;
   let baselineWaitCalls = 0;
+  let resolveHostileResponse: ((response: Response) => void) | undefined;
   const directoryInspections = new Map<string, number>();
   const snapshots = [[], [], [taggedChild()], []];
   const fetch = vi.fn(async (_url: string, init?: RequestInit) => {
@@ -133,6 +141,9 @@ function createHarness(options: HarnessOptions = {}) {
       }, { once: true }));
     }
     if (options.hostileHangs) return new Promise<Response>(() => undefined);
+    if (options.hostileNeedsNormalRunnerLifecycle) {
+      return new Promise<Response>((resolve) => { resolveHostileResponse = resolve; });
+    }
     return options.hostileResponse ?? createResponse(allDenied());
   });
   const dependencies: IsolationCanaryDependencies = {
@@ -160,7 +171,16 @@ function createHarness(options: HarnessOptions = {}) {
     },
     lookupServiceAccount: async () => options.account ?? { uid: 123, gid: 456 },
     startPrivateServer: async () => ({ url: "http://127.0.0.1:43123/private", getHits: () => options.privateHits ?? 0, close: async () => undefined, destroySockets: () => undefined }),
-    fetch, sleep: async (delay) => { if (delay === 8_000 && !options.hostileHangs) return new Promise<void>(() => undefined); },
+    fetch, sleep: async (delay) => {
+      if (options.hostileNeedsNormalRunnerLifecycle) {
+        if (delay > 120_000 && delay <= 130_000) {
+          queueMicrotask(() => resolveHostileResponse?.(createResponse(allDenied())));
+          return new Promise<void>(() => undefined);
+        }
+        if (delay !== 8_000) return;
+      }
+      if (delay === 8_000 && !options.hostileHangs) return new Promise<void>(() => undefined);
+    },
   };
   return { dependencies, markerHandles, makeDirectory, removeDirectory, remove, fetch, prompt: () => JSON.parse(String(fetch.mock.calls[0]?.[1]?.body)).input[0].content[0].text as string, get cancellationAborted() { return cancellationAborted; }, get requestSettled() { return requestSettled; }, get baselineWaitCalls() { return baselineWaitCalls; } };
 }
