@@ -4,9 +4,9 @@
 
 ## Capable isolated runtime
 
-The pinned package-local `@openai/codex@0.147.0` CLI starts only after capability attestation succeeds. Its fixed policy is `codexapi-capable-isolated-v2`: live public-web research is available by default, and browser use (external and in-app), image viewing, Code Mode, and the Code Mode host are enabled through the checked-in `codexapi-runtime` profile.
+The pinned package-local `@openai/codex@0.147.0` CLI starts only after capability attestation succeeds. Its fixed policy is `codexapi-capable-isolated-v2`: the checked-in `codexapi-runtime` profile enables live public-web research and `view_image`; immutable runner switches separately enable browser use (external and in-app), Code Mode, and the Code Mode host.
 
-Shell tools, shell snapshots, and unified execution are disabled. A command-execution event from Codex fails the request closed. Requests inherit an empty MCP inventory, ignore user and project configuration, run ephemerally, and may write only inside a newly created per-request child workspace; that workspace is removed after the request is safe to clean up.
+Shell tools, shell snapshots, and unified execution are disabled. A command-execution event from Codex fails the request closed. Requests inherit an empty MCP inventory, ignore user and project configuration, and run ephemerally. Codex execution uses a newly created per-request child workspace, removed after it is safe to clean up. `/var/lib/codexapi` is the sole explicit persistent `ReadWritePaths` area for those workspaces; `PrivateTmp` provides API-owned temporary storage for safe generic image downloads.
 
 The production unit runs as the dedicated `codexapi` user and group, binds `HOST=127.0.0.1` and `PORT=3001`, and uses `CODEX_HOME=/var/lib/codexapi/home` plus `CODEX_WORKSPACE=/var/lib/codexapi/workspace`. Before Node starts, it installs the checked-in profile into that dedicated home with mode `0400`. The checkout is read-only; `/var/lib/codexapi` is the only writable service path; and the Ludora admin checkout, `/home`, and `/root` are inaccessible to the service.
 
