@@ -1326,6 +1326,54 @@ describe("Codex runner", () => {
     }
   });
 
+  it("emits a process warning when deferred request workspace cleanup fails", async () => {
+    const controller = new AbortController();
+    const child = new FakeChildProcess();
+    child.kill.mockReturnValue(false);
+    const spawn = createFakeSpawn(child);
+    const requestWorkspace = await createRunnerRequestWorkspace();
+    const cleanupFailure = new Error("workspace removal failed");
+    requestWorkspace.cleanup.mockRejectedValueOnce(cleanupFailure);
+    const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
+    const runner = createCodexRunner({
+      command: "codex",
+      workspace: "C:/workspace",
+      codexHome: TEST_CODEX_HOME,
+      timeoutMs: 1000,
+      terminationGraceMs: 5,
+      forceTerminationGraceMs: 5,
+      spawn,
+      requestWorkspaceFactory: requestWorkspace.factory,
+    });
+
+    try {
+      const resultPromise = runner.runWithDetails!("Hello", { signal: controller.signal });
+      await waitUntil(() => spawn.mock.calls.length === 1);
+      controller.abort();
+      const error = await resultPromise.then(
+        () => {
+          throw new Error("Expected unverified termination to fail.");
+        },
+        (cause: unknown) => cause,
+      );
+      if (!(error instanceof CodexRunnerError)) {
+        throw error;
+      }
+      expect(error).toMatchObject({ code: "TERMINATION_FAILED" });
+
+      child.close(null);
+      await error.cleanupWhenSafe;
+      await waitUntil(() => warning.mock.calls.length === 1);
+      expect(warning).toHaveBeenCalledWith(
+        "Codex request workspace cleanup failed: workspace removal failed",
+        { code: "CODEXAPI_REQUEST_WORKSPACE_CLEANUP_FAILED" },
+      );
+    } finally {
+      warning.mockRestore();
+      await requestWorkspace.removeRoot();
+    }
+  });
+
   it("does not leave a grace timer when kill closes the child synchronously", async () => {
     vi.useFakeTimers();
     const controller = new AbortController();

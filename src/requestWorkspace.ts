@@ -32,14 +32,28 @@ export async function createRequestWorkspace(
     }
 
     let cleaned = false;
+    let cleanupInFlight: Promise<void> | undefined;
     return {
       path: canonicalRequestPath,
-      async cleanup(): Promise<void> {
+      cleanup(): Promise<void> {
         if (cleaned) {
-          return;
+          return Promise.resolve();
         }
-        cleaned = true;
-        await rm(canonicalRequestPath, { recursive: true, force: true });
+        if (cleanupInFlight) {
+          return cleanupInFlight;
+        }
+
+        cleanupInFlight = rm(canonicalRequestPath, { recursive: true, force: true }).then(
+          () => {
+            cleaned = true;
+            cleanupInFlight = undefined;
+          },
+          (error: unknown) => {
+            cleanupInFlight = undefined;
+            throw error;
+          },
+        );
+        return cleanupInFlight;
       },
     };
   } catch (error) {

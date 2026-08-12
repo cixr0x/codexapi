@@ -489,7 +489,13 @@ function cleanupAfterSafeSignal(
   cleanupWhenSafe: Promise<void>,
   cleanup: () => Promise<void>,
 ): void {
-  void cleanupWhenSafe.then(cleanup).catch(() => undefined);
+  void cleanupWhenSafe.then(cleanup).catch((error: unknown) => {
+    const detail = error instanceof Error ? error.message : String(error);
+    process.emitWarning(
+      `Codex request workspace cleanup failed: ${detail}`,
+      { code: "CODEXAPI_REQUEST_WORKSPACE_CLEANUP_FAILED" },
+    );
+  });
 }
 
 function tryKill(child: ChildProcess, signal: NodeJS.Signals): void {

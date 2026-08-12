@@ -2,7 +2,15 @@ import { lstat, mkdtemp, mkdir, readdir, rm, stat, symlink, writeFile } from "no
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+const fsPromises = vi.hoisted(() => ({ rm: vi.fn() }));
+
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  fsPromises.rm.mockImplementation(actual.rm);
+  return { ...actual, rm: fsPromises.rm };
+});
 
 import { createRequestWorkspace } from "../src/requestWorkspace.js";
 
@@ -37,9 +45,55 @@ describe("request workspace", () => {
     await second.cleanup();
   });
 
+  it("allows cleanup to retry after the first removal fails", async () => {
+    const base = await createBase();
+    const workspace = await createRequestWorkspace(base);
+    const failure = new Error("temporary removal failure");
+    const callsBeforeCleanup = fsPromises.rm.mock.calls.length;
+    fsPromises.rm.mockRejectedValueOnce(failure);
+
+    await expect(workspace.cleanup()).rejects.toBe(failure);
+    await expect(stat(workspace.path)).resolves.toBeDefined();
+
+    await workspace.cleanup();
+    expect(fsPromises.rm).toHaveBeenCalledTimes(callsBeforeCleanup + 2);
+    await expect(stat(workspace.path)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("shares one in-flight removal between concurrent cleanup callers", async () => {
+    const base = await createBase();
+    const workspace = await createRequestWorkspace(base);
+    const actualRemove = fsPromises.rm.getMockImplementation();
+    if (!actualRemove) {
+      throw new Error("Expected the filesystem removal implementation.");
+    }
+    let releaseRemoval!: () => void;
+    const removalGate = new Promise<void>((resolve) => {
+      releaseRemoval = resolve;
+    });
+    const callsBeforeCleanup = fsPromises.rm.mock.calls.length;
+    fsPromises.rm.mockImplementationOnce((...args: Parameters<typeof rm>) =>
+      removalGate.then(() => actualRemove(...args)),
+    );
+
+    const first = workspace.cleanup();
+    const second = workspace.cleanup();
+    expect(fsPromises.rm).toHaveBeenCalledTimes(callsBeforeCleanup + 1);
+    let secondSettled = false;
+    void second.then(() => {
+      secondSettled = true;
+    });
+    await Promise.resolve();
+    expect(secondSettled).toBe(false);
+
+    releaseRemoval();
+    await Promise.all([first, second]);
+
+    await expect(stat(workspace.path)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("rejects missing, non-directory, and symlinked bases before creating a child", async () => {
     const base = await createBase();
-    const root = join(base, "..");
     const missing = join(base, "missing");
     const file = join(base, "not-a-directory");
     const linked = join(base, "linked-base");
