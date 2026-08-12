@@ -8,7 +8,7 @@ The pinned package-local `@openai/codex@0.147.0` CLI starts only after capabilit
 
 Shell tools, shell snapshots, and unified execution are disabled. A command-execution event from Codex fails the request closed. Requests inherit an empty MCP inventory, ignore user and project configuration, and run ephemerally. Codex execution uses a newly created per-request child workspace, removed after it is safe to clean up. `/var/lib/codexapi` is the sole explicit persistent `ReadWritePaths` area for those workspaces; `PrivateTmp` provides API-owned temporary storage for safe generic image downloads.
 
-The production unit runs as the dedicated `codexapi` user and group, binds `HOST=127.0.0.1` and `PORT=3001`, and uses `CODEX_HOME=/var/lib/codexapi/home` plus `CODEX_WORKSPACE=/var/lib/codexapi/workspace`. Before Node starts, it installs the checked-in profile into that dedicated home with mode `0400`. The checkout is read-only; `/var/lib/codexapi` is the only writable service path; and the Ludora admin checkout, `/home`, and `/root` are inaccessible to the service.
+The production unit runs as the dedicated `codexapi` user and group, binds `HOST=127.0.0.1` and `PORT=3001`, and uses `CODEX_HOME=/var/lib/codexapi/home` plus `CODEX_WORKSPACE=/var/lib/codexapi/workspace`. Before Node starts, it installs the checked-in profile into that dedicated home with mode `0400`. The checkout is read-only; `/var/lib/codexapi` is its sole explicit persistent `ReadWritePaths` area; and the Ludora admin checkout, `/home`, and `/root` are inaccessible to the service.
 
 `GET /health` reports the accepted CLI version, policy name, and the required and prohibited features. It deliberately does not expose paths, command details, or an exhaustive feature table.
 
