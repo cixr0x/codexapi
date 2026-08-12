@@ -18,3 +18,22 @@ npm run typecheck                # exit 0
 npm run build                    # exit 0
 git diff --check                 # exit 0
 ```
+
+## Review round 1 remediation
+
+Committed follow-up `PENDING_SHA` (replace with the commit SHA) resolves the isolation-canary review findings:
+
+- Parses the production-shaped Responses envelope, examines only returned assistant output fields, JSON-parses `output_text`, and requires exactly the all-`ACCESS_DENIED` assessment. Schema metadata is never treated as model output.
+- Adds fixed `/home` and `/home/robertorojas87` marker roots alongside the original protected paths; looks up the fixed `codexapi` service account, transfers each marker to that uid/gid, and restricts it to mode `0400` before the probe.
+- Uses filename and content entropy independently. Cleanup checks recorded `(dev, ino, regular-file)` identity before unlinking each marker; replaced markers are preserved and fail closed. Model-created outside targets are never deleted automatically.
+- Binds hostile I/O, server close, child observation, abort classification, and workspace cleanup to explicit bounded waits. Cancellation captures exactly one new request child and restores the original baseline child set after an `AbortError` rejection.
+- Adds production-shaped, hermetic tests for malformed/missing/extra/obtained output, private hits and secret disclosure, partial account setup cleanup, replacement safety, normal-completion/concurrent-child cancellation false passes, hung hostile/server operations, all fixed roots/network targets, and exact CLI stdout.
+
+Review-round verification:
+
+```text
+npm test                         # 15 files passed; 327 passed, 1 skipped
+npm run typecheck                # exit 0
+npm run build                    # exit 0
+git diff --check                 # exit 0
+```
