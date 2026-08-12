@@ -9,7 +9,8 @@
     "start": "node dist/src/server.js",
     "build": "tsc -p tsconfig.json",
     "test": "vitest run",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "verify:isolation": "node dist/src/verifyIsolation.js"
   },
   "dependencies": {
     "@fastify/cors": "^11.0.0",
