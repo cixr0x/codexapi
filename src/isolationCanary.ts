@@ -24,13 +24,13 @@ export class IsolationCanaryError extends Error {
 }
 
 interface DirectoryIdentity { dev: number; ino: number; isDirectory: boolean; uid: number; gid: number; mode: number; }
-interface FileIdentity { dev: number; ino: number; isFile: boolean; nlink: number; }
+interface FileIdentity { dev: number; ino: number; isFile: boolean; nlink: number; uid: number; gid: number; mode: number; }
 interface MarkerHandle {
   writeFile(data: string, encoding: "utf8"): Promise<void>;
   chown(uid: number, gid: number): Promise<void>;
   chmod(mode: number): Promise<void>;
   sync(): Promise<void>;
-  stat(): Promise<{ dev: number | bigint; ino: number | bigint; nlink: number | bigint; isFile(): boolean }>;
+  stat(): Promise<{ dev: number | bigint; ino: number | bigint; nlink: number | bigint; uid: number; gid: number; mode: number; isFile(): boolean }>;
   close(): Promise<void>;
 }
 interface PrivateServer {
@@ -40,7 +40,16 @@ interface PrivateServer {
   destroySockets(): void;
 }
 interface ServiceAccount { uid: number; gid: number; }
-interface OwnedMarker { directoryPath: string; path: string; secret: string; directoryIdentity?: DirectoryIdentity; identity?: FileIdentity; handle?: MarkerHandle; markerOpened?: boolean; }
+interface OwnedMarker {
+  directoryPath: string;
+  path: string;
+  secret: string;
+  directoryIdentity?: DirectoryIdentity;
+  initialIdentity?: FileIdentity;
+  preparedIdentity?: FileIdentity;
+  handle?: MarkerHandle;
+  markerOpened?: boolean;
+}
 
 export interface IsolationCanaryDependencies {
   platform: NodeJS.Platform;
@@ -80,12 +89,13 @@ export async function runIsolationCanary(
   let failed = false;
   try {
     const account = await dependencies.lookupServiceAccount();
+    if (!isSafeServiceAccount(account)) throw new Error("service account unavailable");
     for (const root of dependencies.markerRoots ?? MARKER_ROOTS) {
       const directoryPath = `${root}/.codexapi-isolation-canary-${dependencies.randomToken()}`;
       const path = `${directoryPath}/marker`;
       const secret = `marker-secret-${dependencies.randomSecret()}`;
       const marker = await createOwnedMarker(dependencies, directoryPath, path, secret, account, markers);
-      if (!marker.identity?.isFile) throw new Error("marker identity invalid");
+      if (!marker.preparedIdentity?.isFile) throw new Error("marker identity invalid");
     }
     let markerCloseFailed = false;
     for (const marker of markers) if (!(await closeMarkerHandle(marker, dependencies))) markerCloseFailed = true;
@@ -129,17 +139,24 @@ async function createOwnedMarker(
   if (!isOwnedMarkerDirectory(marker.directoryIdentity)) throw new Error("marker directory identity invalid");
   marker.handle = await dependencies.openMarker(path);
   marker.markerOpened = true;
+  marker.initialIdentity = identityFromStat(await marker.handle.stat());
+  if (!isInitialMarker(marker.initialIdentity)) throw new Error("initial marker identity invalid");
   await marker.handle.writeFile(secret, "utf8");
   await marker.handle.chown(account.uid, account.gid);
   await marker.handle.chmod(0o400);
   await marker.handle.sync();
-  marker.identity = identityFromStat(await marker.handle.stat());
-  if (!isOwnedMarker(marker.identity)) throw new Error("marker identity invalid");
+  marker.preparedIdentity = identityFromStat(await marker.handle.stat());
+  if (!sameObjectIdentity(marker.initialIdentity, marker.preparedIdentity) || !isPreparedMarker(marker.preparedIdentity, account)) {
+    throw new Error("marker identity invalid");
+  }
   return marker;
 }
 
-function identityFromStat(stat: { dev: number | bigint; ino: number | bigint; nlink: number | bigint; isFile(): boolean }): FileIdentity {
-  return { dev: Number(stat.dev), ino: Number(stat.ino), nlink: Number(stat.nlink), isFile: stat.isFile() };
+function identityFromStat(stat: { dev: number | bigint; ino: number | bigint; nlink: number | bigint; uid: number; gid: number; mode: number; isFile(): boolean }): FileIdentity {
+  return {
+    dev: Number(stat.dev), ino: Number(stat.ino), nlink: Number(stat.nlink),
+    uid: stat.uid, gid: stat.gid, mode: stat.mode & 0o7777, isFile: stat.isFile(),
+  };
 }
 
 async function sendHostileRequest(
@@ -186,10 +203,14 @@ async function runCancellationProbe(dependencies: IsolationCanaryDependencies): 
   let pending: Promise<Response> | undefined;
   let baseline: readonly string[] = [];
   let childKnown = false;
+  let baselineKnown = false;
   let passed = false;
+  let settlementPassed = false;
+  let cleanupPassed = false;
   const controller = new AbortController();
   try {
     baseline = await dependencies.readDir(dependencies.workspaceBase ?? WORKSPACE_BASE);
+    baselineKnown = true;
     const canaryId = dependencies.randomUuid();
     const tag = isolationCanaryWorkspaceTag(canaryId, "127.0.0.1");
     if (!tag) return false;
@@ -206,11 +227,11 @@ async function runCancellationProbe(dependencies: IsolationCanaryDependencies): 
   } finally {
     if (pending) {
       controller.abort();
-      passed &&= await waitForAbort(pending, dependencies);
-      if (childKnown) passed &&= await waitForWorkspaceBaseline(dependencies, baseline);
+      settlementPassed = await waitForAbort(pending, dependencies);
+      cleanupPassed = baselineKnown ? await waitForWorkspaceBaseline(dependencies, baseline) : false;
     }
   }
-  return passed;
+  return passed && settlementPassed && cleanupPassed && childKnown;
 }
 
 async function waitForTaggedChild(
@@ -321,7 +342,10 @@ async function cleanupOwnedResources(
     try {
       if (!(await closeMarkerHandle(marker, dependencies))) { failed = true; continue; }
       if (!marker.directoryIdentity) { failed = true; continue; }
-      if (!marker.identity) {
+      const currentDirectory = await dependencies.inspectDirectory(marker.directoryPath);
+      if (!sameDirectoryIdentity(marker.directoryIdentity, currentDirectory)) { failed = true; continue; }
+      const expectedMarker = marker.preparedIdentity ?? marker.initialIdentity;
+      if (!expectedMarker) {
         if (!marker.markerOpened && sameDirectoryIdentity(marker.directoryIdentity, await dependencies.inspectDirectory(marker.directoryPath))) {
           await dependencies.removeDirectory(marker.directoryPath);
         } else {
@@ -329,9 +353,11 @@ async function cleanupOwnedResources(
         }
         continue;
       }
-      const currentDirectory = await dependencies.inspectDirectory(marker.directoryPath);
       const currentMarker = await dependencies.inspectMarker(marker.path);
-      if (!sameDirectoryIdentity(marker.directoryIdentity, currentDirectory) || !sameIdentity(marker.identity, currentMarker)) { failed = true; continue; }
+      const markerMatches = marker.preparedIdentity
+        ? samePreparedIdentity(expectedMarker, currentMarker)
+        : sameObjectIdentity(expectedMarker, currentMarker);
+      if (!markerMatches) { failed = true; continue; }
       await dependencies.remove(marker.path);
       await dependencies.removeDirectory(marker.directoryPath);
     } catch { failed = true; }
@@ -339,8 +365,12 @@ async function cleanupOwnedResources(
   return failed;
 }
 
-function sameIdentity(expected: FileIdentity, current: FileIdentity): boolean {
+function sameObjectIdentity(expected: FileIdentity, current: FileIdentity): boolean {
   return expected.isFile && current.isFile && expected.nlink === 1 && current.nlink === 1 && expected.dev === current.dev && expected.ino === current.ino;
+}
+
+function samePreparedIdentity(expected: FileIdentity, current: FileIdentity): boolean {
+  return sameObjectIdentity(expected, current) && expected.uid === current.uid && expected.gid === current.gid && expected.mode === current.mode;
 }
 
 function sameDirectoryIdentity(expected: DirectoryIdentity, current: DirectoryIdentity): boolean {
@@ -352,8 +382,16 @@ function isOwnedMarkerDirectory(identity: DirectoryIdentity): boolean {
   return sameDirectoryIdentity(identity, identity);
 }
 
-function isOwnedMarker(identity: FileIdentity): boolean {
+function isInitialMarker(identity: FileIdentity): boolean {
   return identity.isFile && identity.nlink === 1;
+}
+
+function isPreparedMarker(identity: FileIdentity, account: ServiceAccount): boolean {
+  return isInitialMarker(identity) && identity.uid === account.uid && identity.gid === account.gid && identity.mode === 0o400;
+}
+
+function isSafeServiceAccount(account: ServiceAccount): boolean {
+  return Number.isSafeInteger(account.uid) && account.uid > 0 && Number.isSafeInteger(account.gid) && account.gid > 0;
 }
 
 async function closeMarkerHandle(marker: OwnedMarker, dependencies: IsolationCanaryDependencies): Promise<boolean> {
@@ -405,7 +443,7 @@ async function lookupServiceAccount(): Promise<ServiceAccount> {
   const fields = stdout.trim().split(":");
   const uid = Number(fields[2]);
   const gid = Number(fields[3]);
-  if (!Number.isInteger(uid) || uid < 0 || !Number.isInteger(gid) || gid < 0) throw new Error("service account unavailable");
+  if (!Number.isSafeInteger(uid) || uid <= 0 || !Number.isSafeInteger(gid) || gid <= 0) throw new Error("service account unavailable");
   return { uid, gid };
 }
 
