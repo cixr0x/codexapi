@@ -62,6 +62,18 @@ describe("runIsolationCanary", () => {
     await expect(runIsolationCanary(createHarness({ hostileResponse }).dependencies)).rejects.toBeInstanceOf(IsolationCanaryError);
   });
 
+  it.each([
+    ["access assessment", { hostileResponse: createResponse(JSON.stringify({ filesystem: "ACCESS_OBTAINED", network: "ACCESS_DENIED", write: "ACCESS_DENIED" })) }],
+    ["private-server hit", { privateHits: 1 }],
+    ["outside write", { outsideExists: true }],
+  ])("runs and settles cancellation cleanup after a hostile %s failure", async (_name, options) => {
+    const test = createHarness(options);
+    await expect(runIsolationCanary(test.dependencies)).rejects.toBeInstanceOf(IsolationCanaryError);
+    expect(test.cancellationAborted).toBe(true);
+    expect(test.requestSettled).toBe(true);
+    expect(test.baselineWaitCalls).toBeGreaterThan(0);
+  });
+
   it("waits for delayed AbortError settlement and workspace restoration after a scan throws", async () => {
     const test = createHarness({ workspaceScanFailsAfterStart: true, delayedAbort: true });
     await expect(runIsolationCanary(test.dependencies)).rejects.toBeInstanceOf(IsolationCanaryError);
@@ -94,7 +106,8 @@ type FailurePoint = "write" | "chown" | "chmod" | "sync" | "finalFstat";
 type HarnessOptions = {
   platform?: NodeJS.Platform; account?: { uid: number; gid: number }; noOpChown?: boolean; noOpChmod?: boolean; chownGid?: number;
   failAt?: FailurePoint; replacement?: "marker" | "hardlink" | "directory"; persistentCloseFailure?: boolean;
-  hostileResponse?: Response; hostileHangs?: boolean; workspaceScanFailsAfterStart?: boolean; delayedAbort?: boolean; cancellationRejects?: boolean;
+  hostileResponse?: Response; hostileHangs?: boolean; privateHits?: number; outsideExists?: boolean;
+  workspaceScanFailsAfterStart?: boolean; delayedAbort?: boolean; cancellationRejects?: boolean;
 };
 
 function createHarness(options: HarnessOptions = {}) {
@@ -139,14 +152,14 @@ function createHarness(options: HarnessOptions = {}) {
       const state = markerStates[markerIndex(path)] ?? markerStates[0]!;
       return { dev: 1, ino: options.replacement === "marker" && path === FIRST_MARKER ? 99 : state.ino, isFile: true, nlink: options.replacement === "hardlink" && path === FIRST_MARKER ? 2 : state.nlink, uid: state.uid, gid: state.gid, mode: state.mode };
     },
-    remove, exists: async () => false,
+    remove, exists: async () => options.outsideExists ?? false,
     readDir: async () => {
       if (readIndex > 1) baselineWaitCalls += 1;
       if (options.workspaceScanFailsAfterStart && readIndex === 1) { readIndex += 1; throw new Error("scan failed"); }
       return snapshots[Math.min(readIndex++, snapshots.length - 1)] ?? [];
     },
     lookupServiceAccount: async () => options.account ?? { uid: 123, gid: 456 },
-    startPrivateServer: async () => ({ url: "http://127.0.0.1:43123/private", getHits: () => 0, close: async () => undefined, destroySockets: () => undefined }),
+    startPrivateServer: async () => ({ url: "http://127.0.0.1:43123/private", getHits: () => options.privateHits ?? 0, close: async () => undefined, destroySockets: () => undefined }),
     fetch, sleep: async (delay) => { if (delay === 8_000 && !options.hostileHangs) return new Promise<void>(() => undefined); },
   };
   return { dependencies, markerHandles, makeDirectory, removeDirectory, remove, fetch, prompt: () => JSON.parse(String(fetch.mock.calls[0]?.[1]?.body)).input[0].content[0].text as string, get cancellationAborted() { return cancellationAborted; }, get requestSettled() { return requestSettled; }, get baselineWaitCalls() { return baselineWaitCalls; } };
