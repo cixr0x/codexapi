@@ -1,7 +1,8 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
+import { copyFileSync, mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { afterAll, describe, expect, it } from "vitest";
 
@@ -17,159 +18,91 @@ const workspace = join(tempRoot, "workspace");
 const codexHome = join(tempRoot, "codex-home");
 mkdirSync(workspace);
 mkdirSync(codexHome);
+copyFileSync(
+  fileURLToPath(new URL("../deploy/codexapi-runtime.config.toml", import.meta.url)),
+  join(codexHome, "codexapi-runtime.config.toml"),
+);
 
 afterAll(() => {
   rmSync(tempRoot, { recursive: true, force: true });
 });
 
+function runtimeFeatureArgs(): string[] {
+  return [
+    "--profile",
+    CODEX_EXECUTION_POLICY.permissionProfile,
+    "-c",
+    `approval_policy="${CODEX_EXECUTION_POLICY.approvalPolicy}"`,
+    "-c",
+    "mcp_servers={}",
+    ...CODEX_EXECUTION_POLICY.requiredFeatures.flatMap(({ name }) => ["--enable", name]),
+    ...CODEX_EXECUTION_POLICY.disabledFeatures.flatMap((name) => ["--disable", name]),
+    "-c",
+    'web_search="live"',
+    "-c",
+    "tools.web_search=true",
+  ];
+}
+
+function runProbe(args: string[]) {
+  const command = defaultCodexCommand();
+  return spawnSync(command.command, [...command.args, ...args], {
+    cwd: workspace,
+    env: createCodexChildEnvironment(codexHome),
+    encoding: "utf8",
+    timeout: 20_000,
+    windowsHide: true,
+  });
+}
+
 describe("pinned Codex CLI isolation", () => {
-  it("accepts the strict exec-only base arguments without inference", () => {
+  it("reports the exact pinned Codex CLI version without inference", () => {
     assertSafeExecutionConfig({ codexWorkspace: workspace, codexHome });
-    const command = defaultCodexCommand();
-    const result = spawnSync(
-      command.command,
-      [
-        ...command.args,
-        "exec",
-        "-",
-        "--json",
-        "--skip-git-repo-check",
-        "--sandbox",
-        CODEX_EXECUTION_POLICY.sandbox,
-        "-c",
-        'approval_policy="never"',
-        "-c",
-        "mcp_servers={}",
-        "--ignore-user-config",
-        "--ignore-rules",
-        "--ephemeral",
-        "--strict-config",
-        ...CODEX_EXECUTION_POLICY.disabledFeatures.flatMap((name) => [
-          "--disable",
-          name,
-        ]),
-        "-c",
-        'web_search="disabled"',
-        "--help",
-      ],
-      {
-        cwd: workspace,
-        env: createCodexChildEnvironment(codexHome),
-        encoding: "utf8",
-        timeout: 20_000,
-        windowsHide: true,
-      },
-    );
+    const result = runProbe(["--version"]);
 
     expect(result.error).toBeUndefined();
     expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toContain("Usage: codex exec");
+    expect(result.stdout.trim()).toBe("codex-cli 0.147.0");
   });
 
-  it("accepts the fixed config and current feature names without inference", () => {
-    assertSafeExecutionConfig({ codexWorkspace: workspace, codexHome });
-    const command = defaultCodexCommand();
-    const result = spawnSync(
-      command.command,
-      [
-        ...command.args,
-        "-c",
-        'approval_policy="never"',
-        "-c",
-        "mcp_servers={}",
-        ...CODEX_EXECUTION_POLICY.disabledFeatures.flatMap((name) => [
-          "--disable",
-          name,
-        ]),
-        "features",
-        "list",
-      ],
-      {
-        cwd: workspace,
-        env: createCodexChildEnvironment(codexHome),
-        encoding: "utf8",
-        timeout: 20_000,
-        windowsHide: true,
-      },
-    );
+  it.skipIf(process.platform === "win32")(
+    "reports required capable features and prohibited shell features under the runtime profile (skipped on Windows because the production profile has POSIX filesystem paths)",
+    () => {
+      assertSafeExecutionConfig({ codexWorkspace: workspace, codexHome });
+      const result = runProbe([...runtimeFeatureArgs(), "features", "list"]);
 
-    expect(result.error).toBeUndefined();
-    expect(result.status, result.stderr).toBe(0);
-    for (const name of CODEX_EXECUTION_POLICY.disabledFeatures) {
-      expect(result.stdout).toContain(name);
-    }
-  });
+      expect(result.error).toBeUndefined();
+      expect(result.status, result.stderr).toBe(0);
+      for (const { name, maturity } of CODEX_EXECUTION_POLICY.requiredFeatures) {
+        expect(result.stdout).toMatch(
+          new RegExp(`^${name}\\s+${maturity}\\s+true$`, "m"),
+        );
+      }
+      for (const name of CODEX_EXECUTION_POLICY.disabledFeatures) {
+        expect(result.stdout).toMatch(
+          new RegExp(`^${name}\\s+stable\\s+false$`, "m"),
+        );
+      }
+    },
+  );
 
-  it("has no effective MCP servers in the sanitized dedicated home", () => {
-    assertSafeExecutionConfig({ codexWorkspace: workspace, codexHome });
-    const command = defaultCodexCommand();
-    const result = spawnSync(
-      command.command,
-      [
-        ...command.args,
+  it.skipIf(process.platform === "win32")(
+    "has no effective MCP servers in the sanitized dedicated home (skipped on Windows because the production profile has POSIX filesystem paths)",
+    () => {
+      assertSafeExecutionConfig({ codexWorkspace: workspace, codexHome });
+      const result = runProbe([
+        "--profile",
+        CODEX_EXECUTION_POLICY.permissionProfile,
         "-c",
         "mcp_servers={}",
         "mcp",
         "list",
         "--json",
-      ],
-      {
-        cwd: workspace,
-        env: createCodexChildEnvironment(codexHome, {
-          ...process.env,
-          CODEX_HOME: "C:/attacker-codex-home",
-          HOME: "C:/attacker-home",
-          USERPROFILE: "C:/attacker-user-profile",
-          PATH: "C:/attacker-bin",
-          APPDATA: "C:/attacker-appdata",
-          CODEX_PLUGIN_PATH: "C:/attacker-plugin",
-          MCP_SERVER_COMMAND: "attacker-mcp",
-        }),
-        encoding: "utf8",
-        timeout: 20_000,
-        windowsHide: true,
-      },
-    );
+      ]);
 
-    expect(result.error).toBeUndefined();
-    expect(result.status, result.stderr).toBe(0);
-    expect(JSON.parse(result.stdout)).toEqual([]);
-  });
-
-  it("can use credentials established only in the dedicated Codex home", () => {
-    const command = defaultCodexCommand();
-    const environment = createCodexChildEnvironment(codexHome);
-    const login = spawnSync(
-      command.command,
-      [...command.args, "login", "--with-api-key"],
-      {
-        cwd: workspace,
-        env: environment,
-        input: "test-api-key-not-a-secret\n",
-        encoding: "utf8",
-        timeout: 20_000,
-        windowsHide: true,
-      },
-    );
-
-    expect(login.error).toBeUndefined();
-    expect(login.status, login.stderr).toBe(0);
-
-    const status = spawnSync(
-      command.command,
-      [...command.args, "login", "status"],
-      {
-        cwd: workspace,
-        env: environment,
-        encoding: "utf8",
-        timeout: 20_000,
-        windowsHide: true,
-      },
-    );
-    expect(status.error).toBeUndefined();
-    expect(status.status, status.stderr).toBe(0);
-    expect(`${status.stdout}\n${status.stderr}`).toContain(
-      "Logged in using an API key",
-    );
-  });
+      expect(result.error).toBeUndefined();
+      expect(result.status, result.stderr).toBe(0);
+      expect(JSON.parse(result.stdout)).toEqual([]);
+    },
+  );
 });

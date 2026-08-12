@@ -9,12 +9,20 @@ const MAX_PROBE_OUTPUT_BYTES = 64 * 1024;
 const MAX_PROBE_TIMEOUT_MS = 10_000;
 const PROBE_TERMINATION_GRACE_MS = 1_000;
 
-export const CODEX_CAPABILITY_POLICY_NAME = "codexapi-constrained-v1";
+export const CODEX_CAPABILITY_POLICY_NAME = "codexapi-capable-isolated-v2";
 
 export interface CodexCapabilityReport {
   version: string;
-  shellToolFeature: "stable" | "experimental";
+  requiredFeatures: string[];
+  disabledFeatures: string[];
+  permissionProfile: string;
+  webSearch: "live";
   checked: true;
+}
+
+interface CodexFeatureState {
+  maturity: string;
+  enabled: boolean;
 }
 
 export class CodexCapabilityProbeError extends Error {
@@ -62,7 +70,7 @@ export async function assertCodexCapabilities(
     "feature",
     spawn,
   );
-  const shellToolFeature = parseDisabledFeatureOutput(featureOutput.stdout);
+  assertFeatureOutput(featureOutput.stdout);
 
   const mcpOutput = await runProbe(
     command.command,
@@ -73,21 +81,36 @@ export async function assertCodexCapabilities(
   );
   assertEmptyMcpInventory(mcpOutput.stdout);
 
-  return { version: version.text, shellToolFeature, checked: true };
+  return {
+    version: version.text,
+    requiredFeatures: CODEX_EXECUTION_POLICY.requiredFeatures.map(({ name }) => name),
+    disabledFeatures: [...CODEX_EXECUTION_POLICY.disabledFeatures],
+    permissionProfile: CODEX_EXECUTION_POLICY.permissionProfile,
+    webSearch: "live",
+    checked: true,
+  };
 }
 
 function capabilityPolicyArgs(): string[] {
   return [
+    "--profile",
+    CODEX_EXECUTION_POLICY.permissionProfile,
     "-c",
     `approval_policy=${tomlString(CODEX_EXECUTION_POLICY.approvalPolicy)}`,
     "-c",
     "mcp_servers={}",
+    ...CODEX_EXECUTION_POLICY.requiredFeatures.flatMap(({ name }) => [
+      "--enable",
+      name,
+    ]),
     ...CODEX_EXECUTION_POLICY.disabledFeatures.flatMap((feature) => [
       "--disable",
       feature,
     ]),
     "-c",
-    'web_search="disabled"',
+    'web_search="live"',
+    "-c",
+    "tools.web_search=true",
   ];
 }
 
@@ -286,33 +309,16 @@ function isPinnedVersion(version: { parts: [number, number, number] }): boolean 
   );
 }
 
-function parseDisabledFeatureOutput(output: string): "stable" | "experimental" {
+function assertFeatureOutput(output: string): void {
   const lines = output
     .split(/\r?\n/)
     .map((candidate) => candidate.trim())
     .filter(Boolean);
-  const recognizedMaturities = new Set([
-    "stable",
-    "experimental",
-    "under development",
-    "removed",
-    "deprecated",
-  ]);
-  const features = new Map<
-    string,
-    { maturity: string; enabled: boolean }
-  >();
-  let shellToolFeature: "stable" | "experimental" | undefined;
+  const features = new Map<string, CodexFeatureState>();
 
   for (const line of lines) {
-    const candidateName = /^([a-z][a-z0-9_]*)\s+/.exec(line)?.[1];
     const match = /^([a-z][a-z0-9_]*)\s+(.+?)\s+(true|false)$/.exec(line);
-    if (!match || !recognizedMaturities.has(match[2]!)) {
-      if (candidateName) {
-        throw new Error(
-          `Codex ${candidateName} feature is incompatible with this policy.`,
-        );
-      }
+    if (!match) {
       throw new Error("Codex feature output contained a malformed row.");
     }
 
@@ -324,58 +330,30 @@ function parseDisabledFeatureOutput(output: string): "stable" | "experimental" {
     features.set(name!, { maturity: maturity!, enabled });
   }
 
-  for (const expectedName of CODEX_EXECUTION_POLICY.disabledFeatures) {
-    const feature = features.get(expectedName);
+  for (const name of CODEX_EXECUTION_POLICY.disabledFeatures) {
+    const feature = features.get(name);
     if (!feature) {
-      throw new Error(`Codex ${expectedName} feature was not reported.`);
+      throw new Error(`Codex ${name} feature was not reported.`);
     }
     if (feature.enabled) {
       throw new Error(
-        `Codex ${expectedName} feature is enabled despite the disable policy.`,
+        `Codex ${name} feature is enabled despite the disable policy.`,
       );
-    }
-
-    if (expectedName === "shell_tool") {
-      if (feature.maturity !== "stable" && feature.maturity !== "experimental") {
-        throw new Error("Codex shell_tool feature is incompatible with this policy.");
-      }
-      shellToolFeature = feature.maturity;
     }
   }
 
-  const exactFeatureStates = [
-    { name: "view_image", maturity: "stable", enabled: false },
-    ...CODEX_EXECUTION_POLICY.allowedEnabledFeatures.map((feature) => ({
-      ...feature,
-      enabled: true,
-    })),
-  ];
-  for (const expected of exactFeatureStates) {
+  for (const expected of CODEX_EXECUTION_POLICY.requiredFeatures) {
     const feature = features.get(expected.name);
     if (!feature) {
       throw new Error(`Codex ${expected.name} feature was not reported.`);
     }
     if (
-      feature.enabled !== expected.enabled ||
+      !feature.enabled ||
       feature.maturity !== expected.maturity
     ) {
       throw new Error(`Codex ${expected.name} feature is incompatible with this policy.`);
     }
   }
-
-  const allowedEnabledNames = new Set<string>(
-    CODEX_EXECUTION_POLICY.allowedEnabledFeatures.map((feature) => feature.name),
-  );
-  for (const [name, feature] of features) {
-    if (feature.enabled && !allowedEnabledNames.has(name)) {
-      throw new Error(`Codex ${name} feature is enabled but is not allowed by this policy.`);
-    }
-  }
-
-  if (shellToolFeature === undefined) {
-    throw new Error("Codex shell_tool feature was not reported.");
-  }
-  return shellToolFeature;
 }
 
 function tryKill(child: ChildProcess, signal: NodeJS.Signals): void {

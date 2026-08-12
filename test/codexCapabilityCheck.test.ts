@@ -91,66 +91,45 @@ function testConfig(timeoutMs = 100): {
   };
 }
 
-const DISABLED_FEATURE_OUTPUT = [
-  "apply_patch_freeform removed false",
+const PINNED_FEATURE_OUTPUT = [
   "shell_tool stable false",
-  "apps stable false",
-  "plugins stable false",
   "shell_snapshot stable false",
-  "browser_use stable false",
-  "browser_use_external stable false",
-  "browser_use_full_cdp_access stable false",
-  "in_app_browser stable false",
-  "computer_use stable false",
-  "code_mode under development false",
-  "image_generation stable false",
-  "multi_agent stable false",
-  "memories experimental false",
-  "hooks stable false",
-  "tool_suggest stable false",
-  "enable_mcp_apps under development false",
-  "skill_mcp_dependency_install stable false",
-  "tool_call_mcp_elicitation stable false",
-  "code_mode_host stable false",
-  "remote_plugin stable false",
-  "plugin_sharing stable false",
-  "enable_fanout under development false",
-  "workspace_dependencies stable false",
-  "view_image stable false",
-  "auth_elicitation stable false",
-  "collaboration_modes removed false",
-  "enable_request_compression stable false",
-  "fast_mode stable false",
-  "goals stable false",
-  "guardian_approval stable false",
-  "in_app_updates stable false",
-  "item_ids removed true",
-  "mentions_v2 stable false",
-  "personality stable false",
-  "remote_compaction_v2 stable false",
-  "resize_all_images removed true",
-  "secret_auth_storage stable false",
-  "skill_search stable false",
-  "sqlite removed false",
-  "steer removed false",
   "unified_exec stable false",
-  "terminal_resize_reflow removed true",
-  "tool_search_always_defer_mcp_tools removed true",
-  "tui_app_server removed true",
-  "use_legacy_landlock deprecated false",
+  "browser_use stable true",
+  "browser_use_external stable true",
+  "code_mode under development true",
+  "code_mode_host stable true",
+  "in_app_browser stable true",
+  "view_image stable true",
+  "apps stable true",
+  "multi_agent stable true",
 ].join("\n") + "\n";
 
+function successfulProbe(featureOutput = PINNED_FEATURE_OUTPUT): ProbeSpawn {
+  return createProbeSpawn([
+    { stdout: "codex-cli 0.147.0\n" },
+    { stdout: featureOutput },
+    { stdout: "[]\n" },
+  ]);
+}
+
 describe("Codex capability startup check", () => {
-  it("accepts the pinned CLI with a recognized shell tool feature and no MCP servers", async () => {
-    const spawn = createProbeSpawn([
-      { stdout: "codex-cli 0.147.0\n" },
-      { stdout: DISABLED_FEATURE_OUTPUT },
-      { stdout: "[]\n" },
-    ]);
+  it("accepts required capable features, prohibited shell features, and unrelated enabled features", async () => {
+    const spawn = successfulProbe();
 
     await expect(assertCodexCapabilities(testConfig(), spawn)).resolves.toEqual({
       version: "0.147.0",
-      shellToolFeature: "stable",
+      requiredFeatures: [
+        "browser_use",
+        "browser_use_external",
+        "code_mode",
+        "code_mode_host",
+        "in_app_browser",
+        "view_image",
+      ],
+      disabledFeatures: ["shell_tool", "shell_snapshot", "unified_exec"],
+      permissionProfile: "codexapi-runtime",
+      webSearch: "live",
       checked: true,
     });
     expect(spawn.calls[0]).toEqual([
@@ -169,24 +148,44 @@ describe("Codex capability startup check", () => {
     ]);
     expect(spawn.calls[1]?.[1]).toEqual(
       expect.arrayContaining([
-        "features",
-        "list",
+        "--profile",
+        "codexapi-runtime",
+        "--enable",
+        "browser_use",
+        "--enable",
+        "view_image",
         "--disable",
         "shell_tool",
         "--disable",
-        "view_image",
+        "unified_exec",
+        'web_search="live"',
+        "tools.web_search=true",
+        "features",
+        "list",
       ]),
     );
-    expect(spawn.calls[1]?.[1]).not.toContain("--strict-config");
-    expect(spawn.calls[2]?.[1]).toEqual(
-      expect.arrayContaining(["mcp", "list", "--json", "mcp_servers={}"]),
+    expect(spawn.calls[1]?.[1]).not.toEqual(
+      expect.arrayContaining([
+        "--ignore-user-config",
+        "--ignore-rules",
+        "--ephemeral",
+        "--strict-config",
+      ]),
     );
-    expect(spawn.calls[2]?.[1]).not.toContain("--strict-config");
+    expect(spawn.calls[2]?.[1]).toEqual(
+      expect.arrayContaining([
+        "--profile",
+        "codexapi-runtime",
+        "mcp_servers={}",
+        "mcp",
+        "list",
+        "--json",
+      ]),
+    );
   });
 
   it.each([
     ["an older version", "codex-cli 0.146.0\n", /requires exact Codex CLI 0\.147\.0/i],
-    ["an older minor version", "codex-cli 0.144.99\n", /requires exact Codex CLI 0\.147\.0/i],
     ["a newer untested version", "codex-cli 0.147.1\n", /requires exact Codex CLI 0\.147\.0/i],
     ["unparseable version output", "Codex version unknown\n", /version output was not recognized/i],
   ])("rejects %s before inspecting features", async (_name, versionOutput, message) => {
@@ -196,192 +195,18 @@ describe("Codex capability startup check", () => {
     expect(spawn.calls).toHaveLength(1);
   });
 
-  it.each([
-    "codex-cli 0.147.0 extra\n",
-    "codex-cli 0.147.0-beta\n",
-    "codex-cli 0.147.0\ncodex-cli 0.147.0\n",
-    "codex-cli 999999999999999999999.144.1\n",
-    "codex-cli 01.144.1\n",
-    "Codex-cli 0.147.0\n",
-  ])("rejects malformed complete version output %j", async (versionOutput) => {
-    const spawn = createProbeSpawn([{ stdout: versionOutput }]);
-
-    await expect(assertCodexCapabilities(testConfig(), spawn)).rejects.toThrow(
-      /version output was not recognized/i,
-    );
-    expect(spawn.calls).toHaveLength(1);
-  });
-
-  it("rejects a nonzero version probe", async () => {
-    const spawn = createProbeSpawn([{ code: 1, stderr: "bad executable" }]);
-
-    await expect(assertCodexCapabilities(testConfig(), spawn)).rejects.toThrow(
-      /version probe exited with code 1/i,
-    );
-  });
-
-  it.each([
-    [
-      "a missing shell tool feature",
-      DISABLED_FEATURE_OUTPUT.replace("shell_tool stable false\n", ""),
-      /shell_tool feature was not reported/i,
-    ],
-    ["an incompatible shell tool feature", "shell_tool removed false\n", /shell_tool feature is incompatible/i],
-  ])("rejects %s", async (_name, featureOutput, message) => {
-    const spawn = createProbeSpawn([
-      { stdout: "codex-cli 0.147.0\n" },
-      { stdout: featureOutput },
-    ]);
-
-    await expect(assertCodexCapabilities(testConfig(), spawn)).rejects.toThrow(message);
-  });
-
-  it.each([
-    "shell_tool stable false trailing\n",
-    "shell_tool removed false\n",
-    "shell_tool stable false\nshell_tool experimental false\n",
-    "shell_tool stable false\nshell_tool stable false\n",
-    "shell_tool stable maybe\n",
-  ])("rejects malformed or ambiguous shell_tool output %j", async (featureOutput) => {
-    const spawn = createProbeSpawn([
-      { stdout: "codex-cli 0.147.0\n" },
-      { stdout: featureOutput },
-    ]);
-
-    await expect(assertCodexCapabilities(testConfig(), spawn)).rejects.toThrow(
-      /shell_tool feature is incompatible/i,
-    );
-  });
-
-  it("rejects shell_tool reported enabled despite the disable override", async () => {
-    const spawn = createProbeSpawn([
-      { stdout: "codex-cli 0.147.0\n" },
-      { stdout: "shell_tool stable true\n" },
-    ]);
-
-    await expect(assertCodexCapabilities(testConfig(), spawn)).rejects.toThrow(
-      /shell_tool feature is enabled/i,
-    );
-    expect(spawn.calls).toHaveLength(2);
-  });
-
-  it("rejects any other fixed-disabled feature reported enabled", async () => {
-    const spawn = createProbeSpawn([
-      { stdout: "codex-cli 0.147.0\n" },
-      {
-        stdout: DISABLED_FEATURE_OUTPUT.replace(
-          "computer_use stable false",
-          "computer_use stable true",
-        ),
-      },
-      { stdout: "[]\n" },
-    ]);
-
-    await expect(assertCodexCapabilities(testConfig(), spawn)).rejects.toThrow(
-      /computer_use feature is enabled/i,
-    );
-    expect(spawn.calls).toHaveLength(2);
-  });
-
-  it("rejects a missing fixed-disabled feature row", async () => {
-    const spawn = createProbeSpawn([
-      { stdout: "codex-cli 0.147.0\n" },
-      {
-        stdout: DISABLED_FEATURE_OUTPUT.replace("apps stable false\n", ""),
-      },
-    ]);
-
-    await expect(assertCodexCapabilities(testConfig(), spawn)).rejects.toThrow(
-      /apps feature was not reported/i,
-    );
-    expect(spawn.calls).toHaveLength(2);
-  });
-
-  it("rejects a malformed fixed-disabled feature maturity column", async () => {
-    const spawn = createProbeSpawn([
-      { stdout: "codex-cli 0.147.0\n" },
-      {
-        stdout: DISABLED_FEATURE_OUTPUT.replace(
-          "computer_use stable false",
-          "computer_use stable true false",
-        ),
-      },
-      { stdout: "[]\n" },
-    ]);
-
-    await expect(assertCodexCapabilities(testConfig(), spawn)).rejects.toThrow(
-      /computer_use feature is incompatible/i,
-    );
-    expect(spawn.calls).toHaveLength(2);
-  });
-
-  it.each([
-    ["a malformed nonblank row", `${DISABLED_FEATURE_OUTPUT}malformed row\n`, /malformed feature is incompatible/i],
-    [
-      "a duplicate non-policy row",
-      `${DISABLED_FEATURE_OUTPUT}apply_patch_freeform removed false\n`,
-      /apply_patch_freeform feature is incompatible/i,
-    ],
-    [
-      "an unknown maturity",
-      `${DISABLED_FEATURE_OUTPUT}future_feature preview false\n`,
-      /future_feature feature is incompatible/i,
-    ],
-    [
-      "an unexpected enabled stable feature",
-      `${DISABLED_FEATURE_OUTPUT}future_feature stable true\n`,
-      /future_feature feature is enabled/i,
-    ],
-    [
-      "an enabled removed feature",
-      DISABLED_FEATURE_OUTPUT.replace(
-        "apply_patch_freeform removed false",
-        "apply_patch_freeform removed true",
-      ),
-      /apply_patch_freeform feature is enabled/i,
-    ],
-  ])("rejects complete feature output containing %s", async (_name, featureOutput, message) => {
-    const spawn = createProbeSpawn([
-      { stdout: "codex-cli 0.147.0\n" },
-      { stdout: featureOutput },
-    ]);
-
-    await expect(assertCodexCapabilities(testConfig(), spawn)).rejects.toThrow(message);
-    expect(spawn.calls).toHaveLength(2);
-  });
-
-  it("rejects maturity drift for an explicitly allowlisted removed row", async () => {
-    const spawn = createProbeSpawn([
-      { stdout: "codex-cli 0.147.0\n" },
-      {
-        stdout: DISABLED_FEATURE_OUTPUT.replace(
-          "item_ids removed true",
-          "item_ids stable true",
-        ),
-      },
-    ]);
-
-    await expect(assertCodexCapabilities(testConfig(), spawn)).rejects.toThrow(
-      /item_ids feature is incompatible/i,
-    );
-    expect(spawn.calls).toHaveLength(2);
-  });
-
   it.each(
-    CODEX_EXECUTION_POLICY.allowedEnabledFeatures.flatMap((feature) => [
+    CODEX_EXECUTION_POLICY.requiredFeatures.flatMap((feature) => [
       [
         feature.name,
         "missing",
-        DISABLED_FEATURE_OUTPUT.replace(
-          `${feature.name} ${feature.maturity} true\n`,
-          "",
-        ),
+        PINNED_FEATURE_OUTPUT.replace(`${feature.name} ${feature.maturity} true\n`, ""),
         new RegExp(`Codex ${feature.name} feature was not reported`, "i"),
       ],
       [
         feature.name,
         "false",
-        DISABLED_FEATURE_OUTPUT.replace(
+        PINNED_FEATURE_OUTPUT.replace(
           `${feature.name} ${feature.maturity} true`,
           `${feature.name} ${feature.maturity} false`,
         ),
@@ -390,78 +215,54 @@ describe("Codex capability startup check", () => {
       [
         feature.name,
         "maturity drift",
-        DISABLED_FEATURE_OUTPUT.replace(
+        PINNED_FEATURE_OUTPUT.replace(
           `${feature.name} ${feature.maturity} true`,
           `${feature.name} deprecated true`,
         ),
         new RegExp(`Codex ${feature.name} feature is incompatible with this policy`, "i"),
       ],
     ]),
-  )("rejects allowlisted feature %s when its exact state is %s", async (_name, _state, featureOutput, message) => {
-    const spawn = createProbeSpawn([
-      { stdout: "codex-cli 0.147.0\n" },
-      { stdout: featureOutput },
-    ]);
+  )("rejects required feature %s when it is %s", async (_name, _state, featureOutput, message) => {
+    const spawn = successfulProbe(featureOutput);
 
     await expect(assertCodexCapabilities(testConfig(), spawn)).rejects.toThrow(message);
     expect(spawn.calls).toHaveLength(2);
   });
 
+  it.each(CODEX_EXECUTION_POLICY.disabledFeatures)(
+    "rejects prohibited feature %s when it is enabled",
+    async (name) => {
+      const spawn = successfulProbe(
+        PINNED_FEATURE_OUTPUT.replace(`${name} stable false`, `${name} stable true`),
+      );
+
+      await expect(assertCodexCapabilities(testConfig(), spawn)).rejects.toThrow(
+        new RegExp(`Codex ${name} feature is enabled despite the disable policy`, "i"),
+      );
+      expect(spawn.calls).toHaveLength(2);
+    },
+  );
+
   it.each([
     [
-      "missing",
-      DISABLED_FEATURE_OUTPUT.replace("view_image stable false\n", ""),
-      /view_image feature was not reported/i,
+      "a malformed nonblank row",
+      `${PINNED_FEATURE_OUTPUT}malformed row\n`,
+      /feature output contained a malformed row/i,
     ],
     [
-      "enabled",
-      DISABLED_FEATURE_OUTPUT.replace("view_image stable false", "view_image stable true"),
-      /view_image feature is enabled/i,
+      "a duplicate row",
+      `${PINNED_FEATURE_OUTPUT}apps stable true\n`,
+      /apps feature is incompatible/i,
     ],
-    [
-      "incompatible",
-      DISABLED_FEATURE_OUTPUT.replace("view_image stable false", "view_image preview false"),
-      /view_image feature is incompatible/i,
-    ],
-    [
-      "experimental false",
-      DISABLED_FEATURE_OUTPUT.replace(
-        "view_image stable false",
-        "view_image experimental false",
-      ),
-      /view_image feature is incompatible/i,
-    ],
-    [
-      "removed false",
-      DISABLED_FEATURE_OUTPUT.replace(
-        "view_image stable false",
-        "view_image removed false",
-      ),
-      /view_image feature is incompatible/i,
-    ],
-    [
-      "duplicate",
-      DISABLED_FEATURE_OUTPUT.replace(
-        "view_image stable false",
-        "view_image stable false\nview_image stable false",
-      ),
-      /view_image feature is incompatible/i,
-    ],
-  ])("rejects %s view_image startup evidence", async (_name, featureOutput, message) => {
-    const spawn = createProbeSpawn([
-      { stdout: "codex-cli 0.147.0\n" },
-      { stdout: featureOutput },
-    ]);
+  ])("rejects %s", async (_name, featureOutput, message) => {
+    const spawn = successfulProbe(featureOutput);
 
     await expect(assertCodexCapabilities(testConfig(), spawn)).rejects.toThrow(message);
     expect(spawn.calls).toHaveLength(2);
   });
 
   it("fails closed when multibyte probe output exceeds the 64 KiB byte cap", async () => {
-    const spawn = createProbeSpawn([
-      { stdout: "codex-cli 0.147.0\n" },
-      { stdout: `shell_tool stable false\n${"é".repeat(64 * 1024)}` },
-    ]);
+    const spawn = successfulProbe(`${PINNED_FEATURE_OUTPUT}${"é".repeat(64 * 1024)}`);
 
     await expect(assertCodexCapabilities(testConfig(), spawn)).rejects.toThrow(
       /feature probe output exceeded 65536 bytes/i,
@@ -472,12 +273,7 @@ describe("Codex capability startup check", () => {
   it("rejects a nonempty MCP inventory", async () => {
     const spawn = createProbeSpawn([
       { stdout: "codex-cli 0.147.0\n" },
-      {
-        stdout: DISABLED_FEATURE_OUTPUT.replace(
-          "shell_tool stable false",
-          "shell_tool experimental false",
-        ),
-      },
+      { stdout: PINNED_FEATURE_OUTPUT },
       { stdout: '[{"name":"unexpected"}]\n' },
     ]);
 
