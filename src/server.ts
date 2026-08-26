@@ -41,7 +41,6 @@ import {
 } from "./openaiCompat.js";
 import { ISOLATION_CANARY_HEADER, isolationCanaryWorkspaceTag } from "./isolationCanaryCorrelation.js";
 import {
-  emptyPreparedRemoteImage,
   prepareRemoteImage as defaultPrepareRemoteImage,
   type PreparedRemoteImage,
   type SafeImageReason,
@@ -200,9 +199,9 @@ export function createServer(options: CreateServerOptions = {}): FastifyInstance
     let reasoningEffort: string | undefined;
     const webSearchEnabled = true;
     let imageDiagnosticCode: "none" | SafeImageReason = "none";
-    let preparedImage = emptyPreparedRemoteImage();
-    let preparedImageCleanupSafe = true;
-    let preparedImageCleanupWhenSafe: Promise<void> | undefined;
+    const preparedImages: PreparedRemoteImage[] = [];
+    let preparedImagesCleanupSafe = true;
+    let preparedImagesCleanupWhenSafe: Promise<void> | undefined;
     const disconnectSignal = requestSignal(request, reply);
 
     try {
@@ -219,13 +218,13 @@ export function createServer(options: CreateServerOptions = {}): FastifyInstance
       codexOptions.workspaceTag = isolationCanaryWorkspaceTag(canaryId, remoteAddress);
       selectedModel = codexOptions.model ?? config.codexDefaultModel;
       reasoningEffort = codexOptions.reasoningEffort;
-      if (normalizedRequest.imageUrl !== null) {
-        preparedImage = await prepareRemoteImage(normalizedRequest.imageUrl, {
+      for (const imageUrl of normalizedRequest.imageUrls) {
+        preparedImages.push(await prepareRemoteImage(imageUrl, {
           signal: disconnectSignal,
-        });
+        }));
       }
-      imageDiagnosticCode = preparedImage.reason ?? "none";
-      codexOptions.imagePaths = preparedImage.path ? [preparedImage.path] : [];
+      imageDiagnosticCode = preparedImages.find((image) => image.reason !== null)?.reason ?? "none";
+      codexOptions.imagePaths = preparedImages.flatMap((image) => image.path ? [image.path] : []);
       codexOptions.signal = disconnectSignal;
       runResult = await runPromptWithDetails(runner, prompt, codexOptions);
       outputText = normalizeStructuredOutput(runResult.stdout, format);
@@ -254,11 +253,11 @@ export function createServer(options: CreateServerOptions = {}): FastifyInstance
       });
       return responseBody;
     } catch (error) {
-      preparedImageCleanupSafe = !(
+      preparedImagesCleanupSafe = !(
         error instanceof CodexRunnerError && error.childMayBeRunning
       );
-      if (!preparedImageCleanupSafe && error instanceof CodexRunnerError) {
-        preparedImageCleanupWhenSafe = error.cleanupWhenSafe;
+      if (!preparedImagesCleanupSafe && error instanceof CodexRunnerError) {
+        preparedImagesCleanupWhenSafe = error.cleanupWhenSafe;
       }
       const mappedError = mapError(error);
       await logCall(callLogger, {
@@ -282,12 +281,12 @@ export function createServer(options: CreateServerOptions = {}): FastifyInstance
       sendOpenAIError(reply, mappedError);
       return undefined;
     } finally {
-      if (preparedImageCleanupSafe) {
-        await cleanupPreparedImage(preparedImage, request.log);
-      } else if (preparedImageCleanupWhenSafe) {
-        cleanupPreparedImageWhenSafe(
-          preparedImageCleanupWhenSafe,
-          preparedImage,
+      if (preparedImagesCleanupSafe) {
+        await cleanupPreparedImages(preparedImages, request.log);
+      } else if (preparedImagesCleanupWhenSafe) {
+        cleanupPreparedImagesWhenSafe(
+          preparedImagesCleanupWhenSafe,
+          preparedImages,
           request.log,
         );
       }
@@ -339,16 +338,23 @@ function createClientDisconnectSignal(
   return controller.signal;
 }
 
-function cleanupPreparedImageWhenSafe(
+function cleanupPreparedImagesWhenSafe(
   cleanupWhenSafe: Promise<void>,
-  preparedImage: PreparedRemoteImage,
+  preparedImages: PreparedRemoteImage[],
   logger: FastifyBaseLogger,
 ): void {
   void cleanupWhenSafe
-    .then(() => cleanupPreparedImage(preparedImage, logger))
+    .then(() => cleanupPreparedImages(preparedImages, logger))
     .catch(() => {
       logImageCleanupFailure(logger);
     });
+}
+
+async function cleanupPreparedImages(
+  preparedImages: PreparedRemoteImage[],
+  logger: FastifyBaseLogger,
+): Promise<void> {
+  await Promise.all(preparedImages.map((preparedImage) => cleanupPreparedImage(preparedImage, logger)));
 }
 
 async function cleanupPreparedImage(

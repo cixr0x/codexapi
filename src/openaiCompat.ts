@@ -10,6 +10,8 @@ import {
 type JsonRecord = Record<string, unknown>;
 type InputImagePart = JsonRecord & { type: "input_image" };
 
+const MAX_RESPONSES_INPUT_IMAGES = 2;
+
 export type OpenAIErrorType =
   | "invalid_request_error"
   | "api_error"
@@ -101,12 +103,12 @@ export function buildResponsesPrompt(body: unknown): string {
 
 export interface NormalizedResponsesRequest {
   prompt: string;
-  imageUrl: string | null;
+  imageUrls: string[];
 }
 
 export function normalizeResponsesRequest(body: unknown): NormalizedResponsesRequest {
   const request = requireRecord(body, "Request body must be a JSON object.");
-  const inputImage = validateResponsesInputImage(request);
+  const inputImages = validateResponsesInputImages(request);
   rejectStreaming(request);
   validateWebSearchDeclaration(request);
 
@@ -124,7 +126,7 @@ export function normalizeResponsesRequest(body: unknown): NormalizedResponsesReq
     lines.push(`instructions: ${request.instructions}`);
   }
 
-  const formattedInput = formatResponseInput(request.input, inputImage);
+  const formattedInput = formatResponseInput(request.input, inputImages);
   for (const line of formattedInput.lines) {
     lines.push(line);
   }
@@ -135,7 +137,7 @@ export function normalizeResponsesRequest(body: unknown): NormalizedResponsesReq
 
   return {
     prompt: lines.join("\n"),
-    imageUrl: formattedInput.imageUrl,
+    imageUrls: formattedInput.imageUrls,
   };
 }
 
@@ -317,17 +319,17 @@ function validateWebSearchDeclaration(body: JsonRecord): void {
 
 function formatResponseInput(
   input: unknown,
-  inputImage: InputImagePart | null,
+  inputImages: InputImagePart[],
 ): {
   lines: string[];
-  imageUrl: string | null;
+  imageUrls: string[];
 } {
   if (typeof input === "string") {
-    return { lines: [`input: ${input}`], imageUrl: null };
+    return { lines: [`input: ${input}`], imageUrls: [] };
   }
 
   if (!Array.isArray(input)) {
-    return { lines: [`input: ${formatContent(input)}`], imageUrl: null };
+    return { lines: [`input: ${formatContent(input)}`], imageUrls: [] };
   }
 
   const lines = input.map((item, index) => {
@@ -343,7 +345,7 @@ function formatResponseInput(
     const rawContent = record.content ?? record.text ?? record;
     const content = Array.isArray(record.content)
       ? record.content
-          .map((part) => formatResponseContentPart(part, inputImage))
+          .map((part) => formatResponseContentPart(part, inputImages))
           .filter(Boolean)
           .join("\n")
       : formatContent(rawContent);
@@ -354,19 +356,20 @@ function formatResponseInput(
 
   return {
     lines,
-    imageUrl: inputImage === null ? null : (inputImage.image_url as string),
+    imageUrls: inputImages.map((inputImage) => inputImage.image_url as string),
   };
 }
 
 function formatResponseContentPart(
   part: unknown,
-  inputImage: InputImagePart | null,
+  inputImages: InputImagePart[],
 ): string {
-  if (inputImage === null || part !== inputImage) {
+  const imageIndex = inputImages.indexOf(part as InputImagePart);
+  if (imageIndex === -1) {
     return formatContentPart(part);
   }
 
-  return `[store cover attached when available]\nimage_url: ${inputImage.image_url as string}`;
+  return `[image ${imageIndex + 1} attached when available]\nimage_url: ${inputImages[imageIndex]!.image_url as string}`;
 }
 
 function rejectChatImageContent(content: unknown): void {
@@ -393,37 +396,37 @@ function isInputImagePart(value: unknown): value is InputImagePart {
   return isRecord(value) && value.type === "input_image";
 }
 
-function validateResponsesInputImage(request: JsonRecord): InputImagePart | null {
+function validateResponsesInputImages(request: JsonRecord): InputImagePart[] {
   const occurrences = findInputImageOccurrences(request);
   const directParts = directResponsesInputImages(request.input);
 
-  if (directParts.length > 1) {
+  if (directParts.length > MAX_RESPONSES_INPUT_IMAGES) {
     throw openAiError(
-      "Responses requests support at most one input_image.",
+      `Responses requests support at most ${MAX_RESPONSES_INPUT_IMAGES} input_image parts.`,
       "invalid_request_error",
       "input",
       "multiple_input_images",
     );
   }
   if (occurrences.length === 0) {
-    return null;
+    return [];
   }
   if (
-    occurrences.length !== 1 ||
-    directParts.length !== 1 ||
-    occurrences[0] !== directParts[0]
+    occurrences.length !== directParts.length ||
+    occurrences.some((occurrence) => !directParts.includes(occurrence))
   ) {
     throw invalidInputImageError();
   }
 
-  const inputImage = directParts[0]!;
-  if (
-    typeof inputImage.image_url !== "string" ||
-    Object.prototype.hasOwnProperty.call(inputImage, "file_id")
-  ) {
-    throw invalidInputImageError();
+  for (const inputImage of directParts) {
+    if (
+      typeof inputImage.image_url !== "string" ||
+      Object.prototype.hasOwnProperty.call(inputImage, "file_id")
+    ) {
+      throw invalidInputImageError();
+    }
   }
-  return inputImage;
+  return directParts;
 }
 
 function directResponsesInputImages(input: unknown): InputImagePart[] {

@@ -34,7 +34,7 @@ describe("OpenAI compatibility mapping", () => {
   ])("validates Responses requests with %s without changing default research", (_name, body) => {
     expect(normalizeResponsesRequest(body)).toEqual({
       prompt: "input: Hello",
-      imageUrl: null,
+      imageUrls: [],
     });
   });
 
@@ -155,7 +155,7 @@ describe("OpenAI compatibility mapping", () => {
     expect(prompt).toBe("user: First line.\nSecond line.\nassistant: Prior answer.");
   });
 
-  it("extracts one Responses input_image while keeping its URL and a fixed marker in the prompt", () => {
+  it("extracts one Responses input_image while keeping its URL and an ordered marker in the prompt", () => {
     const imageUrl = "https://images.example.test/store-cover.webp?version=2";
 
     const normalized = normalizeResponsesRequest({
@@ -176,15 +176,42 @@ describe("OpenAI compatibility mapping", () => {
     expect(normalized).toEqual({
       prompt: [
         'user: {"itemName":"Coffee Rush","imageUrl":"https://images.example.test/store-cover.webp?version=2"}',
-        "[store cover attached when available]",
+        "[image 1 attached when available]",
         `image_url: ${imageUrl}`,
       ].join("\n"),
-      imageUrl,
+      imageUrls: [imageUrl],
     });
     expect(normalized.prompt).not.toContain("[input_image]");
   });
 
-  it("rejects a second Responses input_image before prompt construction", () => {
+  it("extracts two Responses input_image parts in request order", () => {
+    const firstImageUrl = "https://images.example.test/one.jpg";
+    const secondImageUrl = "https://images.example.test/two.jpg";
+
+    expect(normalizeResponsesRequest({
+      input: [
+        {
+          role: "user",
+          content: [
+            { type: "input_text", text: "Compare these covers." },
+            { type: "input_image", image_url: firstImageUrl },
+            { type: "input_image", image_url: secondImageUrl },
+          ],
+        },
+      ],
+    })).toEqual({
+      prompt: [
+        "user: Compare these covers.",
+        "[image 1 attached when available]",
+        `image_url: ${firstImageUrl}`,
+        "[image 2 attached when available]",
+        `image_url: ${secondImageUrl}`,
+      ].join("\n"),
+      imageUrls: [firstImageUrl, secondImageUrl],
+    });
+  });
+
+  it("rejects a third Responses input_image before prompt construction", () => {
     expect(() =>
       normalizeResponsesRequest({
         input: [
@@ -193,6 +220,7 @@ describe("OpenAI compatibility mapping", () => {
             content: [
               { type: "input_image", image_url: "https://images.example.test/one.jpg" },
               { type: "input_image", image_url: "https://images.example.test/two.jpg" },
+              { type: "input_image", image_url: "https://images.example.test/three.jpg" },
             ],
           },
         ],
@@ -222,7 +250,7 @@ describe("OpenAI compatibility mapping", () => {
     const normalized = normalizeResponsesRequest(request);
 
     expect(normalized).toMatchObject({
-      imageUrl: null,
+      imageUrls: [],
     });
     expect(normalized.prompt).toHaveLength(BROAD_INPUT_ITEM_COUNT * 9 - 1);
   });

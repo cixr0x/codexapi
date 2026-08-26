@@ -565,7 +565,7 @@ describe("Fastify server", () => {
     expect(runWithDetails).toHaveBeenCalledWith(
       [
         "user: Find this game by name and cover.",
-        "[store cover attached when available]",
+        "[image 1 attached when available]",
         `image_url: ${imageUrl}`,
       ].join("\n"),
       {
@@ -576,6 +576,75 @@ describe("Fastify server", () => {
       },
     );
     expect(image.cleanup).toHaveBeenCalledOnce();
+    await app.close();
+  });
+
+  it("attaches two safely prepared Responses images in request order and cleans both", async () => {
+    const storeImageUrl = "https://images.example.test/store-cover.png";
+    const itemImageUrl = "https://images.example.test/item-cover.webp";
+    const storeImagePath = "C:\\safe-temp\\codexapi-store-image\\image.png";
+    const itemImagePath = "C:\\safe-temp\\codexapi-item-image\\image.webp";
+    const storeCleanup = vi.fn(async () => undefined);
+    const itemCleanup = vi.fn(async () => undefined);
+    const prepareRemoteImage = vi.fn(async (url: string): Promise<PreparedRemoteImage> => {
+      if (url === storeImageUrl) {
+        return { path: storeImagePath, reason: null, cleanup: storeCleanup };
+      }
+      return { path: itemImagePath, reason: null, cleanup: itemCleanup };
+    });
+    const { runner, runWithDetails } = fakeDetailedRunner("Response from Codex");
+    const app = createServer({
+      config: testConfig(),
+      runner,
+      prepareRemoteImage,
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/responses",
+      payload: {
+        model: "gpt-5.5",
+        input: [
+          {
+            role: "user",
+            content: [
+              { type: "input_text", text: "Compare the store and catalog covers." },
+              { type: "input_image", image_url: storeImageUrl, detail: "high" },
+              { type: "input_image", image_url: itemImageUrl, detail: "high" },
+            ],
+          },
+        ],
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(prepareRemoteImage).toHaveBeenNthCalledWith(
+      1,
+      storeImageUrl,
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+    expect(prepareRemoteImage).toHaveBeenNthCalledWith(
+      2,
+      itemImageUrl,
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+    expect(runWithDetails).toHaveBeenCalledWith(
+      [
+        "user: Compare the store and catalog covers.",
+        "[image 1 attached when available]",
+        `image_url: ${storeImageUrl}`,
+        "[image 2 attached when available]",
+        `image_url: ${itemImageUrl}`,
+      ].join("\n"),
+      {
+        model: "gpt-5.5",
+        reasoningEffort: "medium",
+        imagePaths: [storeImagePath, itemImagePath],
+        signal: expect.any(AbortSignal),
+      },
+    );
+    expect(storeCleanup).toHaveBeenCalledOnce();
+    expect(itemCleanup).toHaveBeenCalledOnce();
     await app.close();
   });
 

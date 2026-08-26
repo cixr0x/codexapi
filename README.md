@@ -57,7 +57,7 @@ Models must be in `CODEX_ALLOWED_MODELS`; absent or blank models use `CODEX_DEFA
 
 Responses requests use the fixed live-search policy without a `tools` declaration. The legacy single-item `{ "tools": [{ "type": "web_search" }] }` declaration remains accepted for compatibility but does not change the available capability; other tool declarations are rejected. Chat Completions does not accept tools or `tool_choice`.
 
-Generic Responses `input_image` compatibility remains supported for one validated public HTTP(S) JPEG, PNG, or WebP image. The server follows limited redirects, enforces a timeout and size limit, passes a verified temporary file to Codex, and removes it afterward. Image failures continue as text-only requests with a bounded diagnostic reason.
+Generic Responses `input_image` compatibility supports up to two validated public HTTP(S) JPEG, PNG, or WebP images. The server follows limited redirects, enforces a timeout and size limit for each image, passes verified temporary files to Codex in request order, and removes them afterward. Image failures continue with the successfully prepared images (or text only when none succeed) and a bounded diagnostic reason.
 
 Ludora BGG matching is separate: it supplies its public `imageUrl` as ordinary prompt text for Codex to open and compare, rather than using `input_image` transport.
 
@@ -74,15 +74,16 @@ curl http://127.0.0.1:3001/v1/responses \
   }'
 ```
 
-Generic `input_image` compatibility:
+Generic two-image `input_image` compatibility:
 
 ```json
 {
   "input": [{
     "role": "user",
     "content": [
-      { "type": "input_text", "text": "Describe this game cover." },
-      { "type": "input_image", "image_url": "https://images.example.test/cover.webp", "detail": "high" }
+      { "type": "input_text", "text": "Compare these game covers." },
+      { "type": "input_image", "image_url": "https://images.example.test/store-cover.webp", "detail": "high" },
+      { "type": "input_image", "image_url": "https://images.example.test/catalog-cover.webp", "detail": "high" }
     ]
   }]
 }
