@@ -75,7 +75,7 @@ const CODE_MODE_DISABLED_WARNING =
 const UNSTABLE_FEATURES_WARNING =
   "Under-development features enabled: code_mode. Under-development features are incomplete and may behave unpredictably. To suppress this warning, set `suppress_unstable_features_warning = true` in /var/lib/codexapi/home/config.toml.";
 const UNSUPPORTED_CODE_MODE_WARNING =
-  "Code Mode is enabled in configuration, but model `gpt-5.4-mini` does not advertise Code Mode support. This may degrade model performance. Disable `features.code_mode` and `features.code_mode_only`, or select a model whose metadata enables Code Mode.";
+  "Code Mode is enabled in configuration, but model `gpt-5.5` does not advertise Code Mode support. This may degrade model performance. Disable `features.code_mode` and `features.code_mode_only`, or select a model whose metadata enables Code Mode.";
 
 class FakeReadable extends EventEmitter {
   private readonly pendingChunks: string[] = [];
@@ -345,7 +345,7 @@ describe("Codex runner", () => {
     });
 
     const resultPromise = runner.runWithDetails!("Hello", {
-      model: "gpt-5.4-mini",
+      model: "gpt-5.6-terra",
       reasoningEffort: "medium",
     });
     child.stdout.push(`${jsonlCompletion("OK")}\n`);
@@ -357,7 +357,7 @@ describe("Codex runner", () => {
       [
         ...SAFE_DEFAULT_EXEC_ARGS,
         "--model",
-        "gpt-5.4-mini",
+        "gpt-5.6-terra",
         "-c",
         "model_reasoning_effort=\"medium\"",
       ],
@@ -843,7 +843,7 @@ describe("Codex runner", () => {
     ]);
 
     await expect(
-      runJsonl(rawStdout, { model: "gpt-5.4-mini" }),
+      runJsonl(rawStdout, { model: "gpt-5.5" }),
     ).resolves.toMatchObject({ stdout: "safe answer" });
   });
 
@@ -853,18 +853,19 @@ describe("Codex runner", () => {
     ]);
 
     await expect(
-      runJsonl(rawStdout, { model: "gpt-5.4-mini" }),
+      runJsonl(rawStdout, { model: "gpt-5.5" }),
     ).resolves.toMatchObject({ stdout: "safe answer" });
   });
 
   it.each([
-    ["unknown warning text", [preTurnWarning("item-warning", "other")]],
+    ["unknown warning text", [preTurnWarning("item-warning", "other")], "gpt-5.5"],
     [
       "reordered pinned warnings",
       [
         preTurnWarning("item-warning-1", UNSUPPORTED_CODE_MODE_WARNING),
         preTurnWarning("item-warning-2", UNSTABLE_FEATURES_WARNING),
       ],
+      "gpt-5.5",
     ],
     [
       "duplicate pinned warnings",
@@ -872,25 +873,23 @@ describe("Codex runner", () => {
         preTurnWarning("item-warning-1", UNSUPPORTED_CODE_MODE_WARNING),
         preTurnWarning("item-warning-2", UNSUPPORTED_CODE_MODE_WARNING),
       ],
+      "gpt-5.5",
     ],
     [
       "warning for a different model",
-      [
-        preTurnWarning(
-          "item-warning",
-          UNSUPPORTED_CODE_MODE_WARNING.replace("gpt-5.4-mini", "gpt-5.5"),
-        ),
-      ],
+      [preTurnWarning("item-warning", UNSUPPORTED_CODE_MODE_WARNING)],
+      "gpt-5.6-terra",
     ],
     [
       "malformed warning item",
       [{ type: "item.completed", item: { id: "", type: "error", message: UNSUPPORTED_CODE_MODE_WARNING } }],
+      "gpt-5.5",
     ],
-  ])("rejects %s before turn start", async (_name, warningEvents) => {
+  ])("rejects %s before turn start", async (_name, warningEvents, model) => {
     await expect(
       runJsonl(
         completionWithPreTurnWarnings(warningEvents),
-        { model: "gpt-5.4-mini" },
+        { model },
       ),
     ).rejects.toMatchObject({
       name: "CodexRunnerError",
@@ -907,7 +906,7 @@ describe("Codex runner", () => {
     ].join("\n");
 
     await expect(
-      runJsonl(rawStdout, { model: "gpt-5.4-mini" }),
+      runJsonl(rawStdout, { model: "gpt-5.5" }),
     ).rejects.toMatchObject({
       name: "CodexRunnerError",
       code: "INVALID_OUTPUT",

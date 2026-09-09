@@ -30,7 +30,7 @@ Copy `.env.example` and set the two dedicated paths. The service accepts only th
 | `CODEX_HOME` | required | Dedicated Codex home and authentication boundary |
 | `CODEX_WORKSPACE` | required | Empty base directory for isolated request workspaces |
 | `CODEX_TIMEOUT_MS` | `120000` | Per-request Codex timeout |
-| `CODEX_DEFAULT_MODEL` | `gpt-5.4-mini` | Model used when callers omit `model` |
+| `CODEX_DEFAULT_MODEL` | `gpt-5.6-terra` | Model used when callers omit `model` |
 | `CODEX_ALLOWED_MODELS` | bundled allowlist | Accepted request model IDs |
 | `CODEX_REASONING_EFFORT` | `medium` | Default reasoning effort |
 | `CODEX_CALL_LOGGING` | `false` | Enables local JSONL request logging |
@@ -69,7 +69,7 @@ Responses research with no tools declaration (live search is already enabled):
 curl http://127.0.0.1:3001/v1/responses \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "gpt-5.4-mini",
+    "model": "gpt-5.6-terra",
     "input": "Find the BoardGameGeek entry for Coffee Rush and cite its official page."
   }'
 ```

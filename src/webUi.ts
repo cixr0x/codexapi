@@ -235,7 +235,7 @@ export const webUiHtml = `<!doctype html>
             <label>
               Model
               <select id="model" name="model">
-                <option value="gpt-5.4-mini">gpt-5.4-mini</option>
+                <option value="gpt-5.6-terra">gpt-5.6-terra</option>
               </select>
             </label>
           </div>
@@ -337,7 +337,7 @@ export const webUiHtml = `<!doctype html>
 
     const defaults = {
       endpoint: "/v1/responses",
-      model: "gpt-5.4-mini",
+      model: "gpt-5.6-terra",
       instructions: "Be concise.",
       prompt: "Hello from the local Codex API. Reply with one short sentence.",
       reasoning: "",

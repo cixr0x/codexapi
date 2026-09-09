@@ -224,14 +224,13 @@ describe("config", () => {
   it("uses the configured model defaults", () => {
     const config = loadTestConfig({}, "C:/repo", "linux");
 
-    expect(config.codexDefaultModel).toBe("gpt-5.4-mini");
+    expect(config.codexDefaultModel).toBe("gpt-5.6-terra");
     expect(config.codexAllowedModels).toEqual([
       "gpt-5.6-sol",
       "gpt-5.6-terra",
       "gpt-5.6-luna",
       "gpt-5.5",
       "gpt-5.4",
-      "gpt-5.4-mini",
       "gpt-5.3-codex-spark",
     ]);
     expect(config.codexReasoningEffort).toBe("medium");

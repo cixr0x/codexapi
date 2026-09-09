@@ -86,8 +86,8 @@ function testConfig() {
     codexWorkspace: join(tmpdir(), "codexapi-test-missing-workspace"),
     codexHome: join(tmpdir(), "codexapi-test-missing-home"),
     codexTimeoutMs: 120000,
-    codexDefaultModel: "gpt-5.4-mini",
-    codexAllowedModels: ["gpt-5.4-mini", "gpt-5.5", "gpt-5.6-sol"],
+    codexDefaultModel: "gpt-5.6-terra",
+    codexAllowedModels: ["gpt-5.6-terra", "gpt-5.5", "gpt-5.6-sol"],
     codexReasoningEffort: "medium" as const,
     callLoggingEnabled: false,
     callLogDir: join(tmpdir(), "codexapi-test-missing-call-logs"),
@@ -143,7 +143,7 @@ describe("Fastify server", () => {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
-            model: "gpt-5.4-mini",
+            model: "gpt-5.6-terra",
             input: "Return exactly READY.",
           }),
         },
@@ -197,7 +197,7 @@ describe("Fastify server", () => {
         throw new Error("Expected a TCP listener.");
       }
       const body = JSON.stringify({
-        model: "gpt-5.4-mini",
+        model: "gpt-5.6-terra",
         input: "Wait for disconnect.",
       });
       const clientRequest = httpRequest({
@@ -420,14 +420,14 @@ describe("Fastify server", () => {
       method: "POST",
       url: "/v1/chat/completions",
       payload: {
-        model: "gpt-5.4-mini",
+        model: "gpt-5.6-terra",
         messages: [{ role: "user", content: "Hello" }],
       },
     });
 
     expect(response.statusCode).toBe(200);
     expect(runWithDetails).toHaveBeenCalledWith("user: Hello\nassistant:", {
-      model: "gpt-5.4-mini",
+      model: "gpt-5.6-terra",
       reasoningEffort: "medium",
       imagePaths: [],
     });
@@ -450,7 +450,7 @@ describe("Fastify server", () => {
       method: "POST",
       url: "/v1/chat/completions",
       payload: {
-        model: "gpt-5.4-mini",
+        model: "gpt-5.6-terra",
         messages: [{ role: "user", content: "Hello" }],
       },
     });
@@ -474,7 +474,7 @@ describe("Fastify server", () => {
     expect(response.json()).toMatchObject({
       object: "list",
       data: [
-        { id: "gpt-5.4-mini", object: "model", owned_by: "local" },
+        { id: "gpt-5.6-terra", object: "model", owned_by: "local" },
         { id: "gpt-5.5", object: "model", owned_by: "local" },
         { id: "gpt-5.6-sol", object: "model", owned_by: "local" },
       ],
@@ -1365,7 +1365,7 @@ describe("Fastify server", () => {
     const response = await app.inject({
       method: "POST",
       url,
-      payload: { model: "gpt-5.4-mini", ...payload },
+      payload: { model: "gpt-5.6-terra", ...payload },
     });
 
     expect(response.statusCode).toBe(400);
@@ -1536,7 +1536,7 @@ describe("Fastify server", () => {
 
     expect(response.statusCode).toBe(200);
     expect(runWithDetails).toHaveBeenCalledWith("input: Hello", {
-      model: "gpt-5.4-mini",
+      model: "gpt-5.6-terra",
       reasoningEffort: "medium",
       imagePaths: [],
       signal: expect.any(AbortSignal),
@@ -1552,7 +1552,7 @@ describe("Fastify server", () => {
       method: "POST",
       url: "/v1/chat/completions",
       payload: {
-        model: "gpt-5.4-mini",
+        model: "gpt-5.6-terra",
         messages: [{ role: "user", content: "Hello" }],
       },
     });
@@ -1561,7 +1561,7 @@ describe("Fastify server", () => {
     expect(run).toHaveBeenCalledWith("user: Hello\nassistant:");
     expect(response.json()).toMatchObject({
       object: "chat.completion",
-      model: "gpt-5.4-mini",
+      model: "gpt-5.6-terra",
       choices: [
         {
           index: 0,
@@ -1581,7 +1581,7 @@ describe("Fastify server", () => {
       method: "POST",
       url: "/v1/responses",
       payload: {
-        model: "gpt-5.4-mini",
+        model: "gpt-5.6-terra",
         instructions: "Be concise.",
         input: "Hello",
       },
@@ -1591,7 +1591,7 @@ describe("Fastify server", () => {
     expect(run).toHaveBeenCalledWith("instructions: Be concise.\ninput: Hello");
     expect(response.json()).toMatchObject({
       object: "response",
-      model: "gpt-5.4-mini",
+      model: "gpt-5.6-terra",
       status: "completed",
       output_text: "Response from Codex",
     });
@@ -1614,14 +1614,14 @@ describe("Fastify server", () => {
       method: "POST",
       url: "/v1/responses",
       payload: {
-        model: "gpt-5.4-mini",
+        model: "gpt-5.6-terra",
         input: "Hello",
       },
     });
 
     expect(response.statusCode).toBe(200);
     expect(runWithDetails).toHaveBeenCalledWith("input: Hello", {
-      model: "gpt-5.4-mini",
+      model: "gpt-5.6-terra",
       reasoningEffort: "medium",
       imagePaths: [],
       signal: expect.any(AbortSignal),
@@ -1634,7 +1634,7 @@ describe("Fastify server", () => {
       timestamp: expect.any(String),
       endpoint: "/v1/responses",
       method: "POST",
-      model: "gpt-5.4-mini",
+      model: "gpt-5.6-terra",
       webSearchEnabled: true,
       imageDiagnosticCode: "none",
       durationMs: expect.any(Number),
@@ -1655,7 +1655,7 @@ describe("Fastify server", () => {
       method: "POST",
       url: "/v1/responses",
       payload: {
-        model: "gpt-5.4-mini",
+        model: "gpt-5.6-terra",
         input: "Translate hello.",
         text: {
           format: {
@@ -1695,7 +1695,7 @@ describe("Fastify server", () => {
       method: "POST",
       url: "/v1/responses",
       payload: {
-        model: "gpt-5.4-mini",
+        model: "gpt-5.6-terra",
         input: "Translate hello.",
         text: {
           format: {
@@ -1728,7 +1728,7 @@ describe("Fastify server", () => {
       method: "POST",
       url: "/v1/responses",
       payload: {
-        model: "gpt-5.4-mini",
+        model: "gpt-5.6-terra",
         input: "Hello",
         text: { format: { type: "grammar" } },
       },
@@ -1757,7 +1757,7 @@ describe("Fastify server", () => {
       method: "POST",
       url,
       payload: {
-        model: "gpt-5.4-mini",
+        model: "gpt-5.6-terra",
         stream: true,
         ...payload,
       },
@@ -1792,7 +1792,7 @@ describe("Fastify server", () => {
       method: "POST",
       url: "/v1/chat/completions",
       payload: {
-        model: "gpt-5.4-mini",
+        model: "gpt-5.6-terra",
         messages: [{ role: "user", content: "Hello" }],
       },
     });
