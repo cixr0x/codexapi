@@ -56,7 +56,7 @@ export interface SafeImageTransportRequestOptions {
   port: number;
   path: string;
   method: "GET";
-  headers: Readonly<Record<"Host" | "Accept", string>>;
+  headers: Readonly<Record<"Host" | "Accept" | "User-Agent", string>>;
   lookup: LookupFunction;
   servername?: string;
   signal: AbortSignal;
@@ -130,6 +130,7 @@ const FETCH_TIMEOUT_MS = 10_000;
 const MAX_REDIRECTS = 3;
 const MAX_CLEANUP_ATTEMPTS = 3;
 const ACCEPT_HEADER = "image/jpeg, image/png, image/webp";
+const USER_AGENT_HEADER = "CodexAPI/0.1.0 (safe image downloader)";
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 
 const NON_PUBLIC_ADDRESSES = createNonPublicBlockLists();
@@ -281,6 +282,7 @@ async function fetchFollowingRedirects(
         headers: {
           Host: currentUrl.host,
           Accept: ACCEPT_HEADER,
+          "User-Agent": USER_AGENT_HEADER,
         },
         lookup: createPinnedLookup(address),
         ...(isIP(normalizedHostname(currentUrl)) === 0

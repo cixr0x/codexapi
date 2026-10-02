@@ -103,6 +103,60 @@ async function dependencies({
 }
 
 describe("prepareRemoteImage destination validation", () => {
+  it.each(["http", "https"])(
+    "downloads from a %s server that rejects requests without a descriptive User-Agent",
+    async (scheme) => {
+      const request: SafeImageTransport = async (_protocol, options) => {
+        const headers: Readonly<Record<string, string>> = options.headers;
+        return /^CodexAPI\/[\w.-]+ \([^\r\n)]*image[^\r\n)]*\)$/.test(headers["User-Agent"] ?? "")
+          ? response()
+          : response({ statusCode: 429 });
+      };
+      const setup = await dependencies({ request });
+
+      const prepared = await prepareRemoteImage(
+        `${scheme}://images.example.test/cover.jpg`,
+        setup.dependencies,
+      );
+
+      expect(prepared.reason).toBeNull();
+      await expect(readFile(prepared.path!)).resolves.toEqual(JPEG);
+      await prepared.cleanup();
+      expect(await readdir(setup.tempRoot)).toEqual([]);
+    },
+  );
+
+  it("keeps the same descriptive User-Agent on a cross-host redirect", async () => {
+    const userAgents: Array<string | undefined> = [];
+    const request: SafeImageTransport = async (_protocol, options) => {
+      const headers: Readonly<Record<string, string>> = options.headers;
+      const userAgent = headers["User-Agent"];
+      userAgents.push(userAgent);
+      if (!/^CodexAPI\/[\w.-]+ \([^\r\n)]*image[^\r\n)]*\)$/.test(userAgent ?? "")) {
+        return response({ statusCode: 429 });
+      }
+      return options.hostname === "first.example.test"
+        ? response({
+            statusCode: 302,
+            headers: { location: "https://second.example.test/cover.jpg" },
+          })
+        : response();
+    };
+    const setup = await dependencies({ request });
+
+    const prepared = await prepareRemoteImage(
+      "http://first.example.test/start",
+      setup.dependencies,
+    );
+
+    expect(prepared.reason).toBeNull();
+    expect(userAgents).toHaveLength(2);
+    expect(userAgents[1]).toBe(userAgents[0]);
+    await expect(readFile(prepared.path!)).resolves.toEqual(JPEG);
+    await prepared.cleanup();
+    expect(await readdir(setup.tempRoot)).toEqual([]);
+  });
+
   it("rejects URL credentials before DNS or transport", async () => {
     const setup = await dependencies();
 
@@ -346,7 +400,7 @@ describe("prepareRemoteImage destination validation", () => {
           Accept: "image/jpeg, image/png, image/webp",
         },
       });
-      expect(Object.keys(options.headers).sort()).toEqual(["Accept", "Host"]);
+      expect(Object.keys(options.headers).sort()).toEqual(["Accept", "Host", "User-Agent"]);
 
       const pinned = await new Promise<{ address: string; family: number }>((resolve, reject) => {
         options.lookup("rebound.internal", { all: false }, (error, address, family) => {

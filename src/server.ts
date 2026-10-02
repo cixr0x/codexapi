@@ -224,6 +224,26 @@ export function createServer(options: CreateServerOptions = {}): FastifyInstance
         }));
       }
       imageDiagnosticCode = preparedImages.find((image) => image.reason !== null)?.reason ?? "none";
+      if (normalizedRequest.imageUrls.length === 2) {
+        if (disconnectSignal.aborted) {
+          throw new CodexRunnerError({
+            message: "Codex command was cancelled.",
+            code: "CANCELLED",
+          });
+        }
+        const failedImageIndex = preparedImages.findIndex((image) => !image.path);
+        if (failedImageIndex !== -1) {
+          const reason = preparedImages[failedImageIndex]!.reason ?? "fetch_failed";
+          imageDiagnosticCode = reason;
+          throw openAiError(
+            `Image ${failedImageIndex + 1} could not be prepared: ${reason}.`,
+            "invalid_request_error",
+            "input",
+            "image_unavailable",
+            422,
+          );
+        }
+      }
       codexOptions.imagePaths = preparedImages.flatMap((image) => image.path ? [image.path] : []);
       codexOptions.signal = disconnectSignal;
       runResult = await runPromptWithDetails(runner, prompt, codexOptions);

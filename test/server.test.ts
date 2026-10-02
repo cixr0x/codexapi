@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { EventEmitter } from "node:events";
 import { request as httpRequest } from "node:http";
 import { join } from "node:path";
@@ -9,9 +9,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { CodexRunnerError, type CodexRunner } from "../src/codexRunner.js";
 import {
   SafeImageCleanupError,
+  prepareRemoteImage as prepareSafeRemoteImage,
   type PreparedRemoteImage,
   type SafeImageReason,
   type SafeRemoteImageDependencies,
+  type SafeImageTransport,
 } from "../src/safeRemoteImage.js";
 import { createServer, isMainModule, startServer } from "../src/server.js";
 
@@ -697,6 +699,125 @@ describe("Fastify server", () => {
     await app.close();
   });
 
+  it.each([
+    {
+      name: "the first image fails",
+      reasons: ["http_status", null],
+      failedIndex: 1,
+      reason: "http_status",
+    },
+    {
+      name: "the second image fails",
+      reasons: [null, "invalid_magic"],
+      failedIndex: 2,
+      reason: "invalid_magic",
+    },
+    {
+      name: "both images fail",
+      reasons: ["http_status", "unsupported_type"],
+      failedIndex: 1,
+      reason: "http_status",
+    },
+  ] as const)(
+    "rejects an incomplete image pair when $name without inference and cleans every download",
+    async ({ reasons, failedIndex, reason }) => {
+      const imageRoot = await tempDir();
+      const logDir = await tempDir();
+      const imageUrls = [
+        "https://images.example.test/private-store.jpg?credential=store-secret",
+        "https://images.example.test/private-catalog.jpg?credential=catalog-secret",
+      ];
+      const preparedImages: PreparedRemoteImage[] = [];
+      const { runner, run, runWithDetails } = fakeDetailedRunner("Unexpected inference");
+      const app = createServer({
+        config: { ...testConfig(), callLoggingEnabled: true, callLogDir: logDir },
+        runner,
+        async prepareRemoteImage(url, dependencies) {
+          const failureReason = reasons[imageUrls.indexOf(url)];
+          const request: SafeImageTransport = async () => ({
+            statusCode: failureReason === "http_status" ? 429 : 200,
+            headers: {
+              "content-type": failureReason === "unsupported_type" ? "text/html" : "image/jpeg",
+            },
+            body: (async function* () {
+              yield failureReason === "invalid_magic"
+                ? Buffer.from("not an image")
+                : Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00]);
+            })(),
+            destroy() {},
+          });
+          const preparedImage = await prepareSafeRemoteImage(url, {
+            ...dependencies,
+            lookup: async () => [{ address: "93.184.216.34", family: 4 }],
+            request,
+            tmpdir: () => imageRoot,
+          });
+          preparedImage.cleanup = vi.fn(preparedImage.cleanup);
+          preparedImages.push(preparedImage);
+          return preparedImage;
+        },
+      });
+
+      try {
+        const response = await app.inject({
+          method: "POST",
+          url: "/v1/responses",
+          payload: {
+            input: [{
+              role: "user",
+              content: [
+                { type: "input_text", text: "Compare the store and catalog covers." },
+                { type: "input_image", image_url: imageUrls[0] },
+                { type: "input_image", image_url: imageUrls[1] },
+              ],
+            }],
+          },
+        });
+
+        expect(response.statusCode).toBe(422);
+        expect(response.json()).toEqual({
+          error: {
+            message: `Image ${failedIndex} could not be prepared: ${reason}.`,
+            type: "invalid_request_error",
+            param: "input",
+            code: "image_unavailable",
+          },
+        });
+        expect(run).not.toHaveBeenCalled();
+        expect(runWithDetails).not.toHaveBeenCalled();
+        expect(preparedImages).toHaveLength(2);
+        await vi.waitFor(async () => {
+          expect(await readdir(imageRoot)).toEqual([]);
+        });
+        for (const image of preparedImages) {
+          expect(image.cleanup).toHaveBeenCalledOnce();
+          if (image.path) {
+            await expect(readFile(image.path)).rejects.toMatchObject({ code: "ENOENT" });
+          }
+        }
+        const logContent = await readFile(join(logDir, "calls.jsonl"), "utf8");
+        expect(JSON.parse(logContent)).toMatchObject({
+          statusCode: 422,
+          imageDiagnosticCode: reason,
+          error: { type: "invalid_request_error", param: "input", code: "image_unavailable" },
+        });
+        for (const sensitive of [
+          ...imageUrls,
+          "images.example.test",
+          "store-secret",
+          "catalog-secret",
+          imageRoot,
+          ...preparedImages.flatMap((image) => image.path ? [image.path] : []),
+        ]) {
+          expect(response.body).not.toContain(sensitive);
+          expect(logContent).not.toContain(sensitive);
+        }
+      } finally {
+        await app.close();
+      }
+    },
+  );
+
   it("cleans a prepared image when the runner fails", async () => {
     const image = fakeImagePreparer({ path: "C:\\safe-temp\\image.jpg" });
     const runner: CodexRunner = {
@@ -1254,6 +1375,125 @@ describe("Fastify server", () => {
     expect(cleanup).toHaveBeenCalledOnce();
     await app.close();
   });
+
+  it.each([1, 2])(
+    "preserves cancellation before inference during pair image %s preparation and cleans both results",
+    async (abortedImageIndex) => {
+      const requestController = new AbortController();
+      const imageRoot = await tempDir();
+      const logDir = await tempDir();
+      const imageUrls = [
+        "https://images.example.test/private-store.jpg?credential=store-secret",
+        "https://images.example.test/private-catalog.jpg?credential=catalog-secret",
+      ];
+      const imageBytes = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00]);
+      const preparedImages: PreparedRemoteImage[] = [];
+      let notifyFetchStarted!: () => void;
+      const fetchStarted = new Promise<void>((resolve) => {
+        notifyFetchStarted = resolve;
+      });
+      const { runner, run, runWithDetails } = fakeDetailedRunner("Unexpected inference");
+      const app = createServer({
+        config: { ...testConfig(), callLoggingEnabled: true, callLogDir: logDir },
+        runner,
+        requestSignal: () => requestController.signal,
+        async prepareRemoteImage(url, dependencies) {
+          const imageIndex = imageUrls.indexOf(url) + 1;
+          const request: SafeImageTransport = async (_protocol, options) => {
+            if (imageIndex === abortedImageIndex) {
+              notifyFetchStarted();
+              await new Promise<void>((resolve) => {
+                options.signal.addEventListener("abort", () => resolve(), { once: true });
+              });
+              throw new Error(`Aborted image ${url} in ${imageRoot}`);
+            }
+            return {
+              statusCode: 200,
+              headers: { "content-type": "image/jpeg" },
+              body: (async function* () { yield imageBytes; })(),
+              destroy() {},
+            };
+          };
+          const preparedImage = await prepareSafeRemoteImage(url, {
+            ...dependencies,
+            lookup: async () => [{ address: "93.184.216.34", family: 4 }],
+            request,
+            tmpdir: () => imageRoot,
+          });
+          preparedImage.cleanup = vi.fn(preparedImage.cleanup);
+          preparedImages.push(preparedImage);
+          return preparedImage;
+        },
+      });
+
+      try {
+        const responsePromise = app.inject({
+          method: "POST",
+          url: "/v1/responses",
+          payload: {
+            input: [{
+              role: "user",
+              content: [
+                { type: "input_text", text: "Compare these covers." },
+                { type: "input_image", image_url: imageUrls[0] },
+                { type: "input_image", image_url: imageUrls[1] },
+              ],
+            }],
+          },
+        });
+
+        await fetchStarted;
+        if (abortedImageIndex === 2) {
+          expect(preparedImages[0]!.path).not.toBeNull();
+          await expect(readFile(preparedImages[0]!.path!)).resolves.toEqual(imageBytes);
+        }
+        requestController.abort();
+        const response = await responsePromise;
+
+        expect(response.statusCode).toBe(499);
+        expect(response.json()).toEqual({
+          error: {
+            message: "Request was cancelled.",
+            type: "api_error",
+            param: null,
+            code: "request_cancelled",
+          },
+        });
+        expect(run).not.toHaveBeenCalled();
+        expect(runWithDetails).not.toHaveBeenCalled();
+        expect(preparedImages).toHaveLength(2);
+        await vi.waitFor(async () => {
+          expect(await readdir(imageRoot)).toEqual([]);
+        });
+        for (const image of preparedImages) {
+          expect(image.cleanup).toHaveBeenCalledOnce();
+          if (image.path) {
+            await expect(readFile(image.path)).rejects.toMatchObject({ code: "ENOENT" });
+          }
+        }
+        const logContent = await readFile(join(logDir, "calls.jsonl"), "utf8");
+        expect(JSON.parse(logContent)).toMatchObject({
+          statusCode: 499,
+          imageDiagnosticCode: "fetch_failed",
+          error: { type: "api_error", param: null, code: "request_cancelled" },
+        });
+        for (const sensitive of [
+          ...imageUrls,
+          "images.example.test",
+          "store-secret",
+          "catalog-secret",
+          imageRoot,
+          ...preparedImages.flatMap((image) => image.path ? [image.path] : []),
+        ]) {
+          expect(response.body).not.toContain(sensitive);
+          expect(logContent).not.toContain(sensitive);
+        }
+      } finally {
+        requestController.abort();
+        await app.close();
+      }
+    },
+  );
 
   it("retains a prepared image until late close after a bounded fatal error", async () => {
     const logDir = await tempDir();

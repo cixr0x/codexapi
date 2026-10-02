@@ -57,7 +57,20 @@ Models must be in `CODEX_ALLOWED_MODELS`; absent or blank models use `CODEX_DEFA
 
 Responses requests use the fixed live-search policy without a `tools` declaration. The legacy single-item `{ "tools": [{ "type": "web_search" }] }` declaration remains accepted for compatibility but does not change the available capability; other tool declarations are rejected. Chat Completions does not accept tools or `tool_choice`.
 
-Generic Responses `input_image` compatibility supports up to two validated public HTTP(S) JPEG, PNG, or WebP images. The server follows limited redirects, enforces a timeout and size limit for each image, passes verified temporary files to Codex in request order, and removes them afterward. Image failures continue with the successfully prepared images (or text only when none succeed) and a bounded diagnostic reason.
+Generic Responses `input_image` compatibility supports up to two validated public HTTP(S) JPEG, PNG, or WebP images. The server sends the fixed `User-Agent: CodexAPI/0.1.0 (safe image downloader)` on every download and redirect request, follows limited redirects, enforces a timeout and size limit for each image, passes verified temporary files to Codex in request order, and removes them afterward.
+
+If a single image cannot be prepared, the request continues with text only and a bounded diagnostic reason. Two-image requests require both images: if either fails, the server returns an OpenAI-style HTTP `422` with code `image_unavailable` without running Codex and cleans up every prepared image. The error message identifies the first failed image by its original 1-based image index and bounded reason, without exposing image URLs or temporary paths. For example:
+
+```json
+{
+  "error": {
+    "message": "Image 1 could not be prepared: http_status.",
+    "type": "invalid_request_error",
+    "param": "input",
+    "code": "image_unavailable"
+  }
+}
+```
 
 Ludora BGG matching is separate: it supplies its public `imageUrl` as ordinary prompt text for Codex to open and compare, rather than using `input_image` transport.
 
