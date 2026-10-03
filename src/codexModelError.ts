@@ -37,7 +37,10 @@ function isModelRejection(message: unknown, model: string): boolean {
     ? message.slice(badRequestPrefix.length).split(", url: ", 1)[0]!
     : message;
   const body = parseRecord(detail);
-  return body?.detail === unsupported;
+  return body?.detail === unsupported || (
+    body?.type === "error" && body.status === 400 && isRecord(body.error) &&
+    body.error.type === "invalid_request_error" && body.error.message === unsupported
+  );
 }
 
 function parseRecord(line: string): Record<string, unknown> | undefined {

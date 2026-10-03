@@ -16,6 +16,10 @@ afterAll(() => {
 });
 const UNSUPPORTED = `The '${MODEL}' model is not supported when using Codex with a ChatGPT account.`;
 const UNAVAILABLE = `The model \`${MODEL}\` does not exist or you do not have access to it.`;
+const UNSUPPORTED_ENVELOPE = {
+  type: "error", status: 400,
+  error: { type: "invalid_request_error", message: UNSUPPORTED },
+};
 const CODE_MODE_WARNING = `Code Mode is enabled in configuration, but model \`${MODEL}\` does not advertise Code Mode support. This may degrade model performance. Disable \`features.code_mode\` and \`features.code_mode_only\`, or select a model whose metadata enables Code Mode.`;
 const endpoints = [
   ["/v1/responses", { input: "Hello" }],
@@ -77,6 +81,8 @@ describe.each(endpoints)("required client model on %s", (url, payload) => {
   it.each([
     ["fatal JSONL event", JSON.stringify({ type: "error", message: UNSUPPORTED }), ""],
     ["failed turn", JSON.stringify({ type: "turn.failed", error: { message: UNSUPPORTED } }), ""],
+    ["stringified error envelope in a fatal event", JSON.stringify({ type: "error", message: JSON.stringify(UNSUPPORTED_ENVELOPE) }), ""],
+    ["stringified error envelope in a failed turn", JSON.stringify({ type: "turn.failed", error: { message: JSON.stringify(UNSUPPORTED_ENVELOPE) } }), ""],
     ["HTTP 400 failure detail", JSON.stringify({ type: "error", message: `unexpected status 400 Bad Request: ${JSON.stringify({ detail: UNSUPPORTED })}, url: https://private.example.test/, request id: secret` }), ""],
     ["stderr error detail", "", `ERROR: ${JSON.stringify({ detail: UNSUPPORTED })}`],
     ["stderr error message", "", `ERROR: ${UNSUPPORTED}`],
@@ -102,6 +108,15 @@ describe.each(endpoints)("required client model on %s", (url, payload) => {
     ["plain stdout", UNSUPPORTED, "", "NON_ZERO_EXIT"],
     ["different model", JSON.stringify({ type: "error", message: UNSUPPORTED.replace(MODEL, "another-model") }), "", "NON_ZERO_EXIT"],
     ["different unavailable model", JSON.stringify({ type: "error", message: `unexpected status 404 Not Found: ${UNAVAILABLE.replace(MODEL, "another-model")}` }), "", "NON_ZERO_EXIT"],
+    ["envelope for a different model", JSON.stringify({ type: "error", message: JSON.stringify({ ...UNSUPPORTED_ENVELOPE, error: { ...UNSUPPORTED_ENVELOPE.error, message: UNSUPPORTED.replace(MODEL, "another-model") } }) }), "", "NON_ZERO_EXIT"],
+    ["authentication status envelope", JSON.stringify({ type: "error", message: JSON.stringify({ ...UNSUPPORTED_ENVELOPE, status: 401 }) }), "", "NON_ZERO_EXIT"],
+    ["rate limit status envelope", JSON.stringify({ type: "error", message: JSON.stringify({ ...UNSUPPORTED_ENVELOPE, status: 429 }) }), "", "NON_ZERO_EXIT"],
+    ["unverified status envelope", JSON.stringify({ type: "error", message: JSON.stringify({ ...UNSUPPORTED_ENVELOPE, status: 404 }) }), "", "NON_ZERO_EXIT"],
+    ["string status envelope", JSON.stringify({ type: "error", message: JSON.stringify({ ...UNSUPPORTED_ENVELOPE, status: "400" }) }), "", "NON_ZERO_EXIT"],
+    ["wrong outer envelope type", JSON.stringify({ type: "error", message: JSON.stringify({ ...UNSUPPORTED_ENVELOPE, type: "warning" }) }), "", "NON_ZERO_EXIT"],
+    ["authentication error type envelope", JSON.stringify({ type: "error", message: JSON.stringify({ ...UNSUPPORTED_ENVELOPE, error: { ...UNSUPPORTED_ENVELOPE.error, type: "authentication_error" } }) }), "", "NON_ZERO_EXIT"],
+    ["nonfatal item envelope", JSON.stringify({ type: "item.completed", item: { id: "warning", type: "error", message: JSON.stringify(UNSUPPORTED_ENVELOPE) } }), "", "NON_ZERO_EXIT"],
+    ["agent output envelope", JSON.stringify({ type: "item.completed", item: { id: "output", type: "agent_message", text: JSON.stringify(UNSUPPORTED_ENVELOPE) } }), "", "NON_ZERO_EXIT"],
     ["near miss", JSON.stringify({ type: "error", message: `Example: ${UNSUPPORTED}` }), "", "NON_ZERO_EXIT"],
     ["auth failure", JSON.stringify({ type: "error", message: `unexpected status 401 Unauthorized: ${JSON.stringify({ detail: UNSUPPORTED })}` }), "", "NON_ZERO_EXIT"],
     ["rate limit", JSON.stringify({ type: "error", message: "Rate limit reached for model caller-selected-model." }), "", "NON_ZERO_EXIT"],
