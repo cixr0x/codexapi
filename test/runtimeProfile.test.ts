@@ -20,6 +20,10 @@ interface TomlTable {
 const tomlTables = parseTomlTables(profile);
 
 describe("CodexAPI capable runtime profile", () => {
+  it("keeps the system-managed permission catalog identical to the home profile", () => {
+    const managed = readFileSync(new URL("../deploy/codex-managed/config.toml", import.meta.url), "utf8");
+    expect(managed.replace(/\r\n/g, "\n")).toBe(profile.replace(/\r\n/g, "\n"));
+  });
   it("defines the fixed capable-isolated runtime boundary", () => {
     expect(profile).toContain('default_permissions = "codexapi-runtime"');
     expect(profile).toContain('web_search = "live"');

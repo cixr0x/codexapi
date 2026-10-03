@@ -242,6 +242,8 @@ function runCodexProcess(
     "-C",
     requestWorkspacePath,
     "-c",
+    `default_permissions=${tomlString(CODEX_EXECUTION_POLICY.permissionProfile)}`,
+    "-c",
     `approval_policy=${tomlString(CODEX_EXECUTION_POLICY.approvalPolicy)}`,
     "-c",
     "mcp_servers={}",

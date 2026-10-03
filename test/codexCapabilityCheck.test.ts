@@ -4,7 +4,14 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { SpawnFn } from "../src/codexRunner.js";
 import { assertCodexCapabilities } from "../src/codexCapabilityCheck.js";
-import { CODEX_EXECUTION_POLICY } from "../src/executionPolicy.js";
+import { assertManagedRuntimeConfig, CODEX_EXECUTION_POLICY } from "../src/executionPolicy.js";
+
+// Fake CLI protocol fixtures assume an accepted managed file. The real guard
+// and real unmanaged/managed CLI cases are covered separately.
+vi.mock("../src/executionPolicy.js", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../src/executionPolicy.js")>(),
+  assertManagedRuntimeConfig: vi.fn(),
+}));
 
 class FakeReadable extends EventEmitter {}
 
@@ -114,6 +121,12 @@ function successfulProbe(featureOutput = PINNED_FEATURE_OUTPUT): ProbeSpawn {
 }
 
 describe("Codex capability startup check", () => {
+  it("rejects missing managed permissions before any CLI probe", async () => {
+    vi.mocked(assertManagedRuntimeConfig).mockImplementationOnce(() => { throw new Error("managed runtime config missing"); });
+    const spawn = successfulProbe();
+    await expect(assertCodexCapabilities(testConfig(), spawn)).rejects.toThrow("managed runtime config missing");
+    expect(spawn.calls).toHaveLength(0);
+  });
   it("accepts the dotted canonical feature names reported by CLI 0.160.0", async () => {
     const spawn = successfulProbe(`${PINNED_FEATURE_OUTPUT}guardianv2.thread_context removed false\n`);
     await expect(assertCodexCapabilities(testConfig(), spawn)).resolves.toMatchObject({ checked: true });
@@ -163,6 +176,7 @@ describe("Codex capability startup check", () => {
         "unified_exec",
         'web_search="live"',
         "tools.web_search=true",
+        'default_permissions="codexapi-runtime"',
         "features",
         "list",
       ]),
@@ -181,6 +195,7 @@ describe("Codex capability startup check", () => {
         "--profile",
         "codexapi-runtime",
         "mcp_servers={}",
+        'default_permissions="codexapi-runtime"',
         "mcp",
         "list",
         "--json",

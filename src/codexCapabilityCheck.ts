@@ -2,7 +2,7 @@ import { spawn as nodeSpawn, type ChildProcess, type SpawnOptions } from "node:c
 
 import { defaultCodexCommand, type AppConfig } from "./config.js";
 import { createCodexChildEnvironment, type SpawnFn } from "./codexRunner.js";
-import { CODEX_EXECUTION_POLICY } from "./executionPolicy.js";
+import { assertManagedRuntimeConfig, CODEX_EXECUTION_POLICY } from "./executionPolicy.js";
 
 const PINNED_CODEX_VERSION = [0, 160, 0] as const;
 const MAX_PROBE_OUTPUT_BYTES = 64 * 1024;
@@ -49,6 +49,7 @@ export async function assertCodexCapabilities(
   config: Pick<AppConfig, "codexWorkspace" | "codexHome" | "codexTimeoutMs">,
   spawn: SpawnFn = nodeSpawn,
 ): Promise<CodexCapabilityReport> {
+  assertManagedRuntimeConfig();
   const command = defaultCodexCommand();
   const versionOutput = await runProbe(
     command.command,
@@ -93,6 +94,8 @@ export async function assertCodexCapabilities(
 
 function featurePolicyArgs(): string[] {
   return [
+    "-c",
+    `default_permissions=${tomlString(CODEX_EXECUTION_POLICY.permissionProfile)}`,
     "-c",
     `approval_policy=${tomlString(CODEX_EXECUTION_POLICY.approvalPolicy)}`,
     "-c",

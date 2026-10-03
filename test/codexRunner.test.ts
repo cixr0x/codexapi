@@ -33,6 +33,8 @@ const SAFE_DEFAULT_EXEC_ARGS = [
   "-C",
   TEST_REQUEST_WORKSPACE,
   "-c",
+  'default_permissions="codexapi-runtime"',
+  "-c",
   'approval_policy="never"',
   "-c",
   "mcp_servers={}",

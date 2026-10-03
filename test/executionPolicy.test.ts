@@ -1,6 +1,7 @@
 import {
   mkdtempSync,
   mkdirSync,
+  readFileSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -13,6 +14,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   CODEX_EXECUTION_POLICY,
   assertSafeExecutionConfig,
+  assertManagedRuntimeConfig,
   executionPolicyHealth,
 } from "../src/executionPolicy.js";
 
@@ -39,6 +41,33 @@ const EXPECTED_POLICY = {
 
 let tempRoot: string;
 let safeCodexHome: string;
+
+describe("managed runtime permissions", () => {
+  const expected = readFileSync(new URL("../deploy/codexapi-runtime.config.toml", import.meta.url));
+
+  it("rejects a requirements-only namespace before trusting capability flags", () => {
+    expect(() => assertManagedRuntimeConfig(() => { throw new Error("ENOENT"); }, "linux"))
+      .toThrow(/managed runtime config.*\/etc\/codex\/config.toml/i);
+  });
+
+  it.each([Buffer.from(""), Buffer.from("[features]\nunified_exec = false\n"), Buffer.from(expected.toString().replace('"deny"', '"read"'))])(
+    "rejects a missing or altered permissions contract", (contents) => {
+      expect(() => assertManagedRuntimeConfig(() => contents, "linux")).toThrow(/managed runtime config/i);
+    },
+  );
+
+  it("accepts the same profile with LF or CRLF and keeps every other byte significant", () => {
+    expect(() => assertManagedRuntimeConfig(() => expected, "linux")).not.toThrow();
+    expect(() => assertManagedRuntimeConfig(() => Buffer.from(expected.toString().replace(/\r?\n/g, "\r\n")), "linux")).not.toThrow();
+    expect(() => assertManagedRuntimeConfig(() => Buffer.concat([expected, Buffer.from("\r")]), "linux")).toThrow(/managed runtime config/i);
+  });
+
+  it("fails closed on native Windows without reading a machine-wide policy", () => {
+    let read = false;
+    expect(() => assertManagedRuntimeConfig(() => { read = true; return expected; }, "win32")).toThrow(/isolated Linux service/i);
+    expect(read).toBe(false);
+  });
+});
 
 beforeEach(() => {
   tempRoot = mkdtempSync(join(tmpdir(), "codexapi-policy-test-"));

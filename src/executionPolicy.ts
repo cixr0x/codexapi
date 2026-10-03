@@ -1,4 +1,4 @@
-import { existsSync, lstatSync, readdirSync, realpathSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import { dirname, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -164,6 +164,28 @@ export function assertSafeExecutionConfig(
 
   if (pathKey(canonicalCodexHome) !== pathKey(resolvedCodexHome)) {
     throw new Error("CODEX_HOME must not be a symbolic link or reparse point.");
+  }
+}
+
+export function assertManagedRuntimeConfig(
+  readManagedConfig: (path: string) => Buffer = (path) => readFileSync(path),
+  platform: NodeJS.Platform = process.platform,
+): void {
+  if (platform !== "linux") {
+    throw new Error("CodexAPI managed runtime policy requires an isolated Linux service namespace.");
+  }
+  const expected = readFileSync(join(CODEXAPI_CHECKOUT, "deploy", "codexapi-runtime.config.toml"));
+  let actual: Buffer;
+  try {
+    actual = readManagedConfig("/etc/codex/config.toml");
+  } catch {
+    throw new Error("CodexAPI managed runtime config is required at /etc/codex/config.toml.");
+  }
+  // Windows checkouts can carry CRLF. Preserve every other byte, including
+  // lone carriage returns and BOMs; never rewrite the installed system file.
+  const normalized = (value: Buffer) => value.toString("latin1").replace(/\r\n/g, "\n");
+  if (normalized(actual) !== normalized(expected)) {
+    throw new Error("CodexAPI managed runtime config must match the checked-in permissions contract.");
   }
 }
 

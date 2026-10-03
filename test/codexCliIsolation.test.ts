@@ -93,7 +93,7 @@ describe("pinned Codex CLI isolation", () => {
     }
   });
 
-  it("accepts managed requirements or rejects unenforced unified execution before inference", async () => {
+  it("accepts managed system permissions or rejects unsupported startup before inference", async () => {
     const featureResult = runProbe([...runtimeFeatureArgs(), "features", "list"]);
     expect(featureResult.error).toBeUndefined();
     expect(featureResult.status, featureResult.stderr).toBe(0);
@@ -104,21 +104,37 @@ describe("pinned Codex CLI isolation", () => {
       codexTimeoutMs: 20_000,
     });
 
-    if (!unifiedExecDisabled) {
-      await expect(attestation).rejects.toThrow(/unified_exec.*managed requirements/i);
-      expect(requireManagedPolicy, "Linux release gates must enforce the managed policy").toBe(false);
-    } else if (process.platform === "win32") {
-      // The production profile contains POSIX filesystem paths and is not a
-      // native-Windows runtime profile, even when administrator policy exists.
-      await expect(attestation).rejects.toThrow(/MCP inventory probe exited/i);
+    if (process.platform === "win32") {
+      await expect(attestation).rejects.toThrow(/isolated Linux service/i);
       expect(requireManagedPolicy, "Managed production gates must run on Linux").toBe(false);
+    } else if (!requireManagedPolicy) {
+      await expect(attestation).rejects.toThrow(/managed runtime config|unified_exec.*managed requirements/i);
+      expect(requireManagedPolicy, "Linux release gates must enforce the managed policy").toBe(false);
     } else {
+      expect(unifiedExecDisabled).toBe(true);
       await expect(attestation).resolves.toMatchObject({ version: "0.160.0", checked: true });
       const attemptedOverride = runProbe(["--enable", "unified_exec", "features", "list"]);
       expect(attemptedOverride.error).toBeUndefined();
       expect(attemptedOverride.status, attemptedOverride.stderr).toBe(0);
       expect(attemptedOverride.stdout).toMatch(/^unified_exec\s+stable\s+false$/m);
     }
+  });
+
+  it("rejects an unavailable explicit permissions profile before inference", () => {
+    // An unmanaged host has only the ignored home profile. A managed release
+    // namespace uses a deliberately absent name to exercise the same fail-closed
+    // CLI contract without making any model, authentication or network request.
+    const permissionName = requireManagedPolicy ? "codexapi-unavailable-regression" : "codexapi-runtime";
+    const result = runProbe([
+      "exec", "-", "--json", "--skip-git-repo-check", "--profile", "codexapi-runtime",
+      "--ignore-user-config", "--ignore-rules", "--ephemeral", "--strict-config",
+      "-c", `default_permissions="${permissionName}"`,
+      "-c", 'approval_policy="never"', "-c", "mcp_servers={}",
+    ]);
+    expect(result.error).toBeUndefined();
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toMatch(/unknown permissions profile|permission.*not.*found|default_permissions requires a .*permissions.*table|default_permissions.*codexapi/i);
+    expect(result.stdout).not.toContain('"type":"turn.started"');
   });
 
   it.skipIf(process.platform === "win32")(

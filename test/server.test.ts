@@ -16,6 +16,12 @@ import {
   type SafeImageTransport,
 } from "../src/safeRemoteImage.js";
 import { createServer, isMainModule, startServer } from "../src/server.js";
+import { assertManagedRuntimeConfig } from "../src/executionPolicy.js";
+
+vi.mock("../src/executionPolicy.js", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../src/executionPolicy.js")>(),
+  assertManagedRuntimeConfig: vi.fn(),
+}));
 
 const BROAD_INPUT_ITEM_COUNT = 130_000;
 
@@ -329,6 +335,17 @@ describe("Fastify server", () => {
     expect(events).toEqual(["probe", "probe", "probe", "listen"]);
     expect(listen).toHaveBeenCalledOnce();
     await app.close();
+  });
+
+  it("never probes or listens when managed runtime permissions are absent", async () => {
+    vi.mocked(assertManagedRuntimeConfig).mockImplementationOnce(() => { throw new Error("managed runtime config missing"); });
+    const spawn = vi.fn();
+    const listen = vi.fn();
+    const { runner } = fakeRunner();
+    await expect(startServer({ config: { ...testConfig(), codexWorkspace: await tempDir(), codexHome: await tempDir() }, runner, spawn, listen }))
+      .rejects.toThrow("managed runtime config missing");
+    expect(spawn).not.toHaveBeenCalled();
+    expect(listen).not.toHaveBeenCalled();
   });
 
   it("detects the entrypoint from a Windows argv path", () => {
