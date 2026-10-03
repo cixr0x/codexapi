@@ -233,10 +233,8 @@ export const webUiHtml = `<!doctype html>
               </select>
             </label>
             <label>
-              Model
-              <select id="model" name="model">
-                <option value="gpt-5.6-terra">gpt-5.6-terra</option>
-              </select>
+              Model (required)
+              <input id="model" name="model" type="text" required placeholder="Enter a model ID supported by your Codex account" />
             </label>
           </div>
 
@@ -337,7 +335,7 @@ export const webUiHtml = `<!doctype html>
 
     const defaults = {
       endpoint: "/v1/responses",
-      model: "gpt-5.6-terra",
+      model: "",
       instructions: "Be concise.",
       prompt: "Hello from the local Codex API. Reply with one short sentence.",
       reasoning: "",
@@ -348,7 +346,7 @@ export const webUiHtml = `<!doctype html>
 
     endpoint.addEventListener("change", refresh);
     format.addEventListener("change", refresh);
-    model.addEventListener("change", refresh);
+    model.addEventListener("input", refresh);
     reasoning.addEventListener("change", refresh);
     instructions.addEventListener("input", refresh);
     promptInput.addEventListener("input", refresh);
@@ -432,39 +430,17 @@ export const webUiHtml = `<!doctype html>
       }
     }
 
-    async function refreshModels() {
-      try {
-        const response = await fetch("/v1/models");
-        const body = await response.json();
-        const models = Array.isArray(body.data) ? body.data : [];
-        const ids = models.map((entry) => entry?.id).filter((id) => typeof id === "string");
-        if (!ids.length) return;
-
-        model.replaceChildren(
-          ...ids.map((id) => {
-            const option = document.createElement("option");
-            option.value = id;
-            option.textContent = id;
-            return option;
-          })
-        );
-        model.value = ids.includes(defaults.model) ? defaults.model : ids[0];
-        refresh();
-      } catch {
-        // Keep the built-in fallback option when discovery is unavailable.
-      }
-    }
-
     function buildBody() {
       const selectedEndpoint = endpoint.value;
       const selectedFormat = format.value;
       const requestModel = model.value.trim();
       const requestReasoning = reasoning.value;
       const prompt = promptInput.value;
+      if (!requestModel) throw new Error("Model is required. Enter a model ID supported by your Codex account.");
 
       if (selectedEndpoint === "/v1/chat/completions") {
         return {
-          ...(requestModel ? { model: requestModel } : {}),
+          model: requestModel,
           ...(requestReasoning ? { reasoning_effort: requestReasoning } : {}),
           messages: [
             ...(instructions.value.trim()
@@ -476,7 +452,7 @@ export const webUiHtml = `<!doctype html>
       }
 
       const body = {
-        ...(requestModel ? { model: requestModel } : {}),
+        model: requestModel,
         ...(requestReasoning ? { reasoning: { effort: requestReasoning } } : {}),
         instructions: instructions.value.trim(),
         input: prompt
@@ -530,7 +506,6 @@ export const webUiHtml = `<!doctype html>
     }
 
     refresh();
-    refreshModels();
     refreshHealth();
   </script>
 </body>

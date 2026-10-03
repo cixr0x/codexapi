@@ -107,7 +107,7 @@ const PINNED_FEATURE_OUTPUT = [
 
 function successfulProbe(featureOutput = PINNED_FEATURE_OUTPUT): ProbeSpawn {
   return createProbeSpawn([
-    { stdout: "codex-cli 0.147.0\n" },
+    { stdout: "codex-cli 0.149.1\n" },
     { stdout: featureOutput },
     { stdout: "[]\n" },
   ]);
@@ -118,7 +118,7 @@ describe("Codex capability startup check", () => {
     const spawn = successfulProbe();
 
     await expect(assertCodexCapabilities(testConfig(), spawn)).resolves.toEqual({
-      version: "0.147.0",
+      version: "0.149.1",
       requiredFeatures: [
         "browser_use",
         "browser_use_external",
@@ -184,8 +184,8 @@ describe("Codex capability startup check", () => {
   });
 
   it.each([
-    ["an older version", "codex-cli 0.146.0\n", /requires exact Codex CLI 0\.147\.0/i],
-    ["a newer untested version", "codex-cli 0.147.1\n", /requires exact Codex CLI 0\.147\.0/i],
+    ["an older version", "codex-cli 0.147.0\n", /requires exact Codex CLI 0\.149\.1/i],
+    ["a newer untested version", "codex-cli 0.149.2\n", /requires exact Codex CLI 0\.149\.1/i],
     ["unparseable version output", "Codex version unknown\n", /version output was not recognized/i],
   ])("rejects %s before inspecting features", async (_name, versionOutput, message) => {
     const spawn = createProbeSpawn([{ stdout: versionOutput }]);
@@ -271,7 +271,7 @@ describe("Codex capability startup check", () => {
 
   it("rejects a nonempty MCP inventory", async () => {
     const spawn = createProbeSpawn([
-      { stdout: "codex-cli 0.147.0\n" },
+      { stdout: "codex-cli 0.149.1\n" },
       { stdout: PINNED_FEATURE_OUTPUT },
       { stdout: '[{"name":"unexpected"}]\n' },
     ]);

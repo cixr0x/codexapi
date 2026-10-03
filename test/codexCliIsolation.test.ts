@@ -60,7 +60,7 @@ describe("pinned Codex CLI isolation", () => {
 
     expect(result.error).toBeUndefined();
     expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout.trim()).toBe("codex-cli 0.147.0");
+    expect(result.stdout.trim()).toBe("codex-cli 0.149.1");
   });
 
   it("reports required capable features and prohibited shell features without loading the runtime profile", () => {

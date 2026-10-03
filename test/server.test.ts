@@ -88,8 +88,6 @@ function testConfig() {
     codexWorkspace: join(tmpdir(), "codexapi-test-missing-workspace"),
     codexHome: join(tmpdir(), "codexapi-test-missing-home"),
     codexTimeoutMs: 120000,
-    codexDefaultModel: "gpt-5.6-terra",
-    codexAllowedModels: ["gpt-5.6-terra", "gpt-5.5", "gpt-5.6-sol"],
     codexReasoningEffort: "medium" as const,
     callLoggingEnabled: false,
     callLogDir: join(tmpdir(), "codexapi-test-missing-call-logs"),
@@ -268,7 +266,7 @@ describe("Fastify server", () => {
     child.stderr = new EventEmitter();
     child.kill = vi.fn();
     const outputs = [
-      "codex-cli 0.147.0\n",
+      "codex-cli 0.149.1\n",
       [
         "shell_tool stable false",
         "shell_snapshot stable false",
@@ -300,7 +298,7 @@ describe("Fastify server", () => {
       expect(health.json()).toMatchObject({
         capabilityPolicy: "codexapi-capable-isolated-v2",
         codexCli: {
-          version: "0.147.0",
+          version: "0.149.1",
           requiredFeatures: [
             "browser_use",
             "browser_use_external",
@@ -388,7 +386,7 @@ describe("Fastify server", () => {
     await app.close();
   });
 
-  it("returns 400 when chat completion model is not allowlisted", async () => {
+  it("accepts a caller-selected chat model without a local allowlist", async () => {
     const { runner, runWithDetails } = fakeDetailedRunner("Hello from Codex");
     const app = createServer({ config: testConfig(), runner });
 
@@ -401,16 +399,9 @@ describe("Fastify server", () => {
       },
     });
 
-    expect(response.statusCode).toBe(400);
-    expect(runWithDetails).not.toHaveBeenCalled();
-    expect(response.json()).toEqual({
-      error: {
-        message: "Model 'local-codex' is not allowed by this local Codex API.",
-        type: "invalid_request_error",
-        param: "model",
-        code: "invalid_model",
-      },
-    });
+    expect(response.statusCode).toBe(200);
+    expect(runWithDetails).toHaveBeenCalledWith("user: Hello\nassistant:", expect.objectContaining({ model: "local-codex" }));
+    expect(response.json()).toMatchObject({ model: "local-codex" });
     await app.close();
   });
 
@@ -473,13 +464,9 @@ describe("Fastify server", () => {
     const response = await app.inject({ method: "GET", url: "/v1/models" });
 
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toMatchObject({
+    expect(response.json()).toEqual({
       object: "list",
-      data: [
-        { id: "gpt-5.6-terra", object: "model", owned_by: "local" },
-        { id: "gpt-5.5", object: "model", owned_by: "local" },
-        { id: "gpt-5.6-sol", object: "model", owned_by: "local" },
-      ],
+      data: [],
     });
     await app.close();
   });
@@ -763,6 +750,7 @@ describe("Fastify server", () => {
           method: "POST",
           url: "/v1/responses",
           payload: {
+            model: "gpt-5.6-terra",
             input: [{
               role: "user",
               content: [
@@ -835,6 +823,7 @@ describe("Fastify server", () => {
       method: "POST",
       url: "/v1/responses",
       payload: {
+        model: "gpt-5.6-terra",
         input: [
           {
             role: "user",
@@ -873,6 +862,7 @@ describe("Fastify server", () => {
       method: "POST",
       url: "/v1/responses",
       payload: {
+        model: "gpt-5.6-terra",
         input: [
           {
             role: "user",
@@ -914,6 +904,7 @@ describe("Fastify server", () => {
       method: "POST",
       url: "/v1/responses",
       payload: {
+        model: "gpt-5.6-terra",
         input: [
           {
             role: "user",
@@ -951,6 +942,7 @@ describe("Fastify server", () => {
       method: "POST",
       url: "/v1/responses",
       payload: {
+        model: "gpt-5.6-terra",
         input: [
           {
             role: "user",
@@ -992,6 +984,7 @@ describe("Fastify server", () => {
       method: "POST",
       url: "/v1/responses",
       payload: {
+        model: "gpt-5.6-terra",
         input: [
           {
             role: "user",
@@ -1022,6 +1015,7 @@ describe("Fastify server", () => {
       method: "POST",
       url: "/v1/chat/completions",
       payload: {
+        model: "gpt-5.6-terra",
         messages: [
           {
             role: "user",
@@ -1116,7 +1110,7 @@ describe("Fastify server", () => {
       const response = await app.inject({
         method: "POST",
         url: "/v1/responses",
-        payload,
+        payload: { model: "gpt-5.6-terra", ...payload },
       });
 
       expect(response.statusCode).toBe(400);
@@ -1141,6 +1135,7 @@ describe("Fastify server", () => {
       method: "POST",
       url: "/v1/chat/completions",
       payload: {
+        model: "gpt-5.6-terra",
         messages: [{ role: "user", content: "Coffee Rush" }],
         metadata: {
           type: "input_image",
@@ -1186,7 +1181,7 @@ describe("Fastify server", () => {
     const response = await app.inject({
       method: "POST",
       url: "/v1/responses",
-      payload,
+      payload: { model: "gpt-5.6-terra", ...payload },
     });
 
     expect(response.statusCode).toBe(400);
@@ -1269,6 +1264,7 @@ describe("Fastify server", () => {
       method: "POST",
       url: "/v1/responses",
       payload: {
+        model: "gpt-5.6-terra",
         input: [
           {
             role: "user",
@@ -1350,6 +1346,7 @@ describe("Fastify server", () => {
       method: "POST",
       url: "/v1/responses",
       payload: {
+        model: "gpt-5.6-terra",
         input: [
           {
             role: "user",
@@ -1431,6 +1428,7 @@ describe("Fastify server", () => {
           method: "POST",
           url: "/v1/responses",
           payload: {
+            model: "gpt-5.6-terra",
             input: [{
               role: "user",
               content: [
@@ -1527,6 +1525,7 @@ describe("Fastify server", () => {
       method: "POST",
       url: "/v1/responses",
       payload: {
+        model: "gpt-5.6-terra",
         input: [
           {
             role: "user",
@@ -1619,13 +1618,13 @@ describe("Fastify server", () => {
       "chat",
       "/v1/chat/completions",
       { messages: [{ role: "user", content: "Hello" }] },
-      "https://user:secret@example.test/x",
+      { value: "https://user:secret@example.test/x" },
     ],
     [
       "Responses",
       "/v1/responses",
       { input: "Hello" },
-      "C:\\temp\\unvalidated-model.json",
+      ["C:\\temp\\unvalidated-model.json"],
     ],
   ])("does not log an unvalidated model identifier after %s validation fails", async (
     _name,
@@ -1654,7 +1653,7 @@ describe("Fastify server", () => {
 
     const logContent = await readFile(join(logDir, "calls.jsonl"), "utf8");
     expect(JSON.parse(logContent)).not.toHaveProperty("model");
-    expect(logContent).not.toContain(unvalidatedModel);
+    expect(logContent).not.toContain(JSON.stringify(unvalidatedModel));
     await app.close();
   });
 
@@ -1736,7 +1735,7 @@ describe("Fastify server", () => {
     await app.close();
   });
 
-  it("returns 400 when Responses model is not allowlisted", async () => {
+  it("accepts a caller-selected Responses model without a local allowlist", async () => {
     const { runner, runWithDetails } = fakeDetailedRunner("Response from Codex");
     const app = createServer({ config: testConfig(), runner });
 
@@ -1749,38 +1748,9 @@ describe("Fastify server", () => {
       },
     });
 
-    expect(response.statusCode).toBe(400);
-    expect(runWithDetails).not.toHaveBeenCalled();
-    expect(response.json()).toEqual({
-      error: {
-        message: "Model 'local-codex' is not allowed by this local Codex API.",
-        type: "invalid_request_error",
-        param: "model",
-        code: "invalid_model",
-      },
-    });
-    await app.close();
-  });
-
-  it("falls back to the default Codex model when Responses model is absent", async () => {
-    const { runner, runWithDetails } = fakeDetailedRunner("Response from Codex");
-    const app = createServer({ config: testConfig(), runner });
-
-    const response = await app.inject({
-      method: "POST",
-      url: "/v1/responses",
-      payload: {
-        input: "Hello",
-      },
-    });
-
     expect(response.statusCode).toBe(200);
-    expect(runWithDetails).toHaveBeenCalledWith("input: Hello", {
-      model: "gpt-5.6-terra",
-      reasoningEffort: "medium",
-      imagePaths: [],
-      signal: expect.any(AbortSignal),
-    });
+    expect(runWithDetails).toHaveBeenCalledWith("input: Hello", expect.objectContaining({ model: "local-codex" }));
+    expect(response.json()).toMatchObject({ model: "local-codex" });
     await app.close();
   });
 
@@ -2040,7 +2010,7 @@ describe("Fastify server", () => {
     expect(response.statusCode).toBe(500);
     expect(response.json()).toEqual({
       error: {
-        message: "Codex command exited with code 2. Bad prompt",
+        message: "Codex command exited with code 2.",
         type: "api_error",
         param: null,
         code: "codex_cli_error",

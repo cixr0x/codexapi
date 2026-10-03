@@ -53,6 +53,7 @@ import {
   normalizeStructuredOutput,
 } from "./structuredOutput.js";
 import { webUiHtml } from "./webUi.js";
+import { isInvalidCodexModel } from "./codexModelError.js";
 
 const DEFERRED_IMAGE_CLEANUP_ATTEMPTS = 3;
 const DEFERRED_IMAGE_CLEANUP_DELAY_MS = 25;
@@ -122,12 +123,7 @@ export function createServer(options: CreateServerOptions = {}): FastifyInstance
 
   app.get("/v1/models", async () => ({
     object: "list",
-    data: config.codexAllowedModels.map((model) => ({
-      id: model,
-      object: "model",
-      created: 0,
-      owned_by: "local",
-    })),
+    data: [],
   }));
 
   app.post("/v1/chat/completions", async (request, reply) => {
@@ -139,9 +135,10 @@ export function createServer(options: CreateServerOptions = {}): FastifyInstance
     const webSearchEnabled = true;
 
     try {
+      const model = requestModel(request.body);
       prompt = buildChatPrompt(request.body);
-      const codexOptions = codexOptionsForChat(request.body, config);
-      selectedModel = codexOptions.model ?? config.codexDefaultModel;
+      const codexOptions = codexOptionsForChat(request.body, config, model);
+      selectedModel = codexOptions.model;
       runResult = await runPromptWithDetails(runner, prompt, codexOptions);
       const responseBody = createChatCompletion({
         model: selectedModel,
@@ -166,7 +163,7 @@ export function createServer(options: CreateServerOptions = {}): FastifyInstance
       });
       return responseBody;
     } catch (error) {
-      const mappedError = mapError(error);
+      const mappedError = mapError(error, selectedModel);
       await logCall(callLogger, {
         id: callId,
         startedAt,
@@ -205,10 +202,11 @@ export function createServer(options: CreateServerOptions = {}): FastifyInstance
     const disconnectSignal = requestSignal(request, reply);
 
     try {
+      const model = requestModel(request.body);
       const normalizedRequest = normalizeResponsesRequest(request.body);
       prompt = normalizedRequest.prompt;
       const format = getResponseTextFormat(request.body);
-      const codexOptions = codexOptionsForResponses(request.body, config, format);
+      const codexOptions = codexOptionsForResponses(request.body, config, format, model);
       const canaryHeader = request.headers[ISOLATION_CANARY_HEADER];
       const canaryId = typeof canaryHeader === "string" ? canaryHeader : undefined;
       const remoteAddress = request.raw.socket.remoteAddress;
@@ -216,7 +214,7 @@ export function createServer(options: CreateServerOptions = {}): FastifyInstance
         throw new Error("Invalid isolation canary request.");
       }
       codexOptions.workspaceTag = isolationCanaryWorkspaceTag(canaryId, remoteAddress);
-      selectedModel = codexOptions.model ?? config.codexDefaultModel;
+      selectedModel = codexOptions.model;
       reasoningEffort = codexOptions.reasoningEffort;
       for (const imageUrl of normalizedRequest.imageUrls) {
         preparedImages.push(await prepareRemoteImage(imageUrl, {
@@ -279,7 +277,7 @@ export function createServer(options: CreateServerOptions = {}): FastifyInstance
       if (!preparedImagesCleanupSafe && error instanceof CodexRunnerError) {
         preparedImagesCleanupWhenSafe = error.cleanupWhenSafe;
       }
-      const mappedError = mapError(error);
+      const mappedError = mapError(error, selectedModel);
       await logCall(callLogger, {
         id: callId,
         startedAt,
@@ -412,12 +410,21 @@ function logImageCleanupFailure(logger: FastifyBaseLogger): void {
   );
 }
 
-function mapError(error: unknown): OpenAIHttpError {
+function mapError(error: unknown, model?: string): OpenAIHttpError {
   if (error instanceof OpenAIHttpError) {
     return error;
   }
 
   if (error instanceof CodexRunnerError) {
+    if (isInvalidCodexModel(error, model)) {
+      return openAiError(
+        "The requested model is unavailable or unsupported by the configured Codex account. Select a model supported by that account.",
+        "invalid_request_error",
+        "model",
+        "invalid_model",
+        400,
+      );
+    }
     if (error.code === "CANCELLED") {
       return openAiError(
         "Request was cancelled.",
@@ -465,12 +472,16 @@ function mapError(error: unknown): OpenAIHttpError {
 }
 
 function codexErrorMessage(error: CodexRunnerError): string {
-  const stderr = error.stderr?.trim();
-  if (!stderr) {
-    return error.message;
+  switch (error.code) {
+    case "NON_ZERO_EXIT":
+      return `Codex command exited with code ${Number.isInteger(error.exitCode) ? error.exitCode : "unknown"}.`;
+    case "SPAWN_ERROR":
+      return "Failed to start Codex command.";
+    case "TIMEOUT":
+      return "Codex command timed out.";
+    default:
+      return "Codex command returned invalid output.";
   }
-
-  return `${error.message} ${stderr.slice(0, 1000)}`;
 }
 
 function sendOpenAIError(reply: FastifyReply, error: OpenAIHttpError): void {
@@ -496,9 +507,9 @@ async function runPromptWithDetails(
   };
 }
 
-function codexOptionsForChat(body: unknown, config: AppConfig): CodexRunOptions {
+function codexOptionsForChat(body: unknown, config: AppConfig, model: string): CodexRunOptions & { model: string } {
   return {
-    model: selectCodexModel(requestModel(body), config),
+    model,
     reasoningEffort: selectReasoningEffort(
       requestChatReasoningEffort(body),
       "reasoning_effort",
@@ -512,9 +523,10 @@ function codexOptionsForResponses(
   body: unknown,
   config: AppConfig,
   format: ResponseTextFormat | null,
-): CodexRunOptions {
-  const options: CodexRunOptions = {
-    model: selectCodexModel(requestModel(body), config),
+  model: string,
+): CodexRunOptions & { model: string } {
+  const options: CodexRunOptions & { model: string } = {
+    model,
     reasoningEffort: selectReasoningEffort(
       requestResponsesReasoningEffort(body),
       "reasoning.effort",
@@ -572,30 +584,17 @@ function requestResponsesReasoningEffort(body: unknown): unknown {
   return body.reasoning.effort;
 }
 
-function selectCodexModel(model: string | undefined, config: AppConfig): string {
-  if (!model) {
-    return config.codexDefaultModel;
+function requestModel(body: unknown): string {
+  const model = isRecord(body) ? body.model : undefined;
+  if (typeof model !== "string" || !model.trim()) {
+    throw openAiError(
+      "model must be a non-empty string.",
+      "invalid_request_error",
+      "model",
+      "invalid_model",
+    );
   }
-
-  if (config.codexAllowedModels.includes(model)) {
-    return model;
-  }
-
-  throw openAiError(
-    `Model '${model}' is not allowed by this local Codex API.`,
-    "invalid_request_error",
-    "model",
-    "invalid_model",
-  );
-}
-
-function requestModel(body: unknown): string | undefined {
-  if (!isRecord(body)) {
-    return undefined;
-  }
-
-  const model = body.model;
-  return typeof model === "string" && model.trim() ? model.trim() : undefined;
+  return model.trim();
 }
 
 function hasCodexRunOptions(options: CodexRunOptions): boolean {

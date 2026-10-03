@@ -115,13 +115,13 @@ describe("config", () => {
     const nativePackageJson = JSON.parse(
       readFileSync(join(nativePackageRoot, "package.json"), "utf8"),
     ) as { name?: string; version?: string };
-    expect(mainPackageJson.version).toBe("0.147.0");
+    expect(mainPackageJson.version).toBe("0.149.1");
     expect(mainPackageJson.optionalDependencies?.[target.packageName]).toBe(
-      `npm:@openai/codex@0.147.0-${target.suffix}`,
+      `npm:@openai/codex@0.149.1-${target.suffix}`,
     );
     expect(nativePackageJson).toMatchObject({
       name: "@openai/codex",
-      version: `0.147.0-${target.suffix}`,
+      version: `0.149.1-${target.suffix}`,
     });
   });
 
@@ -221,18 +221,9 @@ describe("config", () => {
     expect(config).not.toHaveProperty("codexIgnoreRules");
   });
 
-  it("uses the configured model defaults", () => {
+  it("uses the default reasoning effort", () => {
     const config = loadTestConfig({}, "C:/repo", "linux");
 
-    expect(config.codexDefaultModel).toBe("gpt-5.6-terra");
-    expect(config.codexAllowedModels).toEqual([
-      "gpt-5.6-sol",
-      "gpt-5.6-terra",
-      "gpt-5.6-luna",
-      "gpt-5.5",
-      "gpt-5.4",
-      "gpt-5.3-codex-spark",
-    ]);
     expect(config.codexReasoningEffort).toBe("medium");
   });
 
@@ -275,20 +266,6 @@ describe("config", () => {
       expect(config.codexReasoningEffort).toBe(effort);
     },
   );
-
-  it("parses Codex default and allowed model config", () => {
-    const config = loadTestConfig(
-      {
-        CODEX_DEFAULT_MODEL: "custom-fast",
-        CODEX_ALLOWED_MODELS: "custom-fast, custom-deep; gpt-5.5",
-      },
-      "C:/repo",
-      "linux",
-    );
-
-    expect(config.codexDefaultModel).toBe("custom-fast");
-    expect(config.codexAllowedModels).toEqual(["custom-fast", "custom-deep", "gpt-5.5"]);
-  });
 
   it("rejects unsupported Codex backend names", () => {
     expect(() =>

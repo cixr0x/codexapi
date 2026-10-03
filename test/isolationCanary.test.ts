@@ -7,6 +7,36 @@ const FIRST_MARKER = `${FIRST_DIRECTORY}/marker`;
 const MARKER_ROOTS = ["/opt/ludora/ludora-admin", "/opt/ludora/codexapi", "/var/lib/codexapi/home", "/root", "/home", "/home/robertorojas87"];
 
 describe("runIsolationCanary", () => {
+  it("uses its client default model on both requests when CODEX_ISOLATION_MODEL is absent", async () => {
+    const test = createHarness();
+    delete test.dependencies.model;
+    await expect(runIsolationCanary(test.dependencies)).resolves.toEqual({ status: "ok", isolation: "verified" });
+    expect(test.fetch).toHaveBeenCalledTimes(2);
+    for (const [, init] of test.fetch.mock.calls) {
+      expect(JSON.parse(String(init?.body)).model).toBe("gpt-5.6-terra");
+    }
+  });
+
+  it("uses the caller-selected model for both hostile and cancellation requests", async () => {
+    const test = createHarness();
+    Object.assign(test.dependencies, { model: "  isolation-caller-model  " });
+    await expect(runIsolationCanary(test.dependencies)).resolves.toEqual({ status: "ok", isolation: "verified" });
+    expect(test.fetch).toHaveBeenCalledTimes(2);
+    for (const [, init] of test.fetch.mock.calls) {
+      expect(JSON.parse(String(init?.body)).model).toBe("isolation-caller-model");
+    }
+  });
+
+  it.each(["", " \t\n "])("rejects an explicitly blank CODEX_ISOLATION_MODEL before creating any canary resources (%j)", async (model) => {
+    const test = createHarness();
+    Object.assign(test.dependencies, { model });
+    await expect(runIsolationCanary(test.dependencies)).rejects.toMatchObject({
+      message: "CODEX_ISOLATION_MODEL must be a non-empty string.",
+    });
+    expect(test.makeDirectory).not.toHaveBeenCalled();
+    expect(test.fetch).not.toHaveBeenCalled();
+  });
+
   it("attests an initially root-owned marker after fchown, fchmod, and fsync mutate it", async () => {
     const test = createHarness();
     await expect(runIsolationCanary(test.dependencies)).resolves.toEqual({ status: "ok", isolation: "verified" });
@@ -147,6 +177,7 @@ function createHarness(options: HarnessOptions = {}) {
     return options.hostileResponse ?? createResponse(allDenied());
   });
   const dependencies: IsolationCanaryDependencies = {
+    model: "isolation-caller-model",
     platform: options.platform ?? "linux", getuid: () => 0,
     randomToken: () => names.shift() ?? "next", randomSecret: () => secrets.shift() ?? "secret", randomUuid: () => "123e4567-e89b-42d3-a456-426614174000",
     makeDirectory, removeDirectory,

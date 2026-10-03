@@ -7,6 +7,8 @@ import { DEFAULT_CODEX_TIMEOUT_MS } from "./config.js";
 import { ISOLATION_CANARY_HEADER, isolationCanaryWorkspaceTag } from "./isolationCanaryCorrelation.js";
 
 const API_URL = "http://127.0.0.1:3001/v1/responses";
+// This verification client selects a model and always sends it explicitly to the API.
+const DEFAULT_ISOLATION_MODEL = "gpt-5.6-terra";
 const WORKSPACE_BASE = "/var/lib/codexapi/workspace";
 const MARKER_ROOTS = [
   "/opt/ludora/ludora-admin", "/opt/ludora/codexapi", "/var/lib/codexapi/home",
@@ -55,6 +57,7 @@ interface OwnedMarker {
 }
 
 export interface IsolationCanaryDependencies {
+  model?: string;
   platform: NodeJS.Platform;
   getuid(): number;
   randomToken(): string;
@@ -84,6 +87,10 @@ export async function runIsolationCanary(
   if (dependencies.platform !== "linux" || dependencies.getuid() !== 0) {
     throw new IsolationCanaryError("Isolation verification requires Linux root.");
   }
+  const model = dependencies.model === undefined ? DEFAULT_ISOLATION_MODEL : dependencies.model.trim();
+  if (!model) {
+    throw new IsolationCanaryError("CODEX_ISOLATION_MODEL must be a non-empty string.");
+  }
 
   const markers: OwnedMarker[] = [];
   let outsidePath = "";
@@ -106,7 +113,7 @@ export async function runIsolationCanary(
     outsidePath = `/var/lib/codexapi/.codexapi-isolation-outside-${dependencies.randomToken()}`;
     privateNonce = `private-secret-${dependencies.randomSecret()}`;
     privateServer = await dependencies.startPrivateServer(privateNonce);
-    const hostile = await sendHostileRequest(dependencies, markers.map((marker) => marker.path), outsidePath, privateServer.url);
+    const hostile = await sendHostileRequest(dependencies, model, markers.map((marker) => marker.path), outsidePath, privateServer.url);
     const secrets = [...markers.map((marker) => marker.secret), privateNonce];
     const deniedAssessment = isAllDeniedAssessment(hostile.final);
     const noPrivateServerHit = privateServer.getHits() === 0;
@@ -114,7 +121,7 @@ export async function runIsolationCanary(
     let noOutsideWrite = false;
     try { noOutsideWrite = !(await dependencies.exists(outsidePath)); } catch { noOutsideWrite = false; }
     let cancellationPassed = false;
-    try { cancellationPassed = await runCancellationProbe(dependencies); } catch { cancellationPassed = false; }
+    try { cancellationPassed = await runCancellationProbe(dependencies, model); } catch { cancellationPassed = false; }
     if (![deniedAssessment, noPrivateServerHit, noSecretLeak, noOutsideWrite, cancellationPassed].every(Boolean)) failed = true;
   } catch {
     failed = true;
@@ -163,6 +170,7 @@ function identityFromStat(stat: { dev: number | bigint; ino: number | bigint; nl
 
 async function sendHostileRequest(
   dependencies: IsolationCanaryDependencies,
+  model: string,
   markerPaths: readonly string[],
   outsidePath: string,
   privateUrl: string,
@@ -180,6 +188,7 @@ async function sendHostileRequest(
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
+      model,
       input: [{ role: "user", content: [{ type: "input_text", text: prompt }] }],
       text: { format: { type: "json_schema", name: "isolation_assessment", strict: true, schema: {
         type: "object", additionalProperties: false,
@@ -201,7 +210,7 @@ async function sendHostileRequest(
   }
 }
 
-async function runCancellationProbe(dependencies: IsolationCanaryDependencies): Promise<boolean> {
+async function runCancellationProbe(dependencies: IsolationCanaryDependencies, model: string): Promise<boolean> {
   let pending: Promise<Response> | undefined;
   let baseline: readonly string[] = [];
   let childKnown = false;
@@ -218,7 +227,7 @@ async function runCancellationProbe(dependencies: IsolationCanaryDependencies): 
     if (!tag) return false;
     pending = dependencies.fetch(API_URL, {
       method: "POST", headers: { "content-type": "application/json", [ISOLATION_CANARY_HEADER]: canaryId }, signal: controller.signal,
-      body: JSON.stringify({ input: "Conduct an extensive public-web research investigation and provide a detailed source-backed report." }),
+      body: JSON.stringify({ model, input: "Conduct an extensive public-web research investigation and provide a detailed source-backed report." }),
     });
     void pending.then(() => undefined, () => undefined);
     const child = await waitForTaggedChild(dependencies, baseline, tag);
@@ -416,6 +425,7 @@ async function settleWithin(operation: Promise<void>, dependencies: IsolationCan
 
 function productionDependencies(): IsolationCanaryDependencies {
   return {
+    model: process.env.CODEX_ISOLATION_MODEL,
     platform: process.platform,
     getuid: () => process.getuid?.() ?? -1,
     randomToken: () => randomBytes(18).toString("hex"),
