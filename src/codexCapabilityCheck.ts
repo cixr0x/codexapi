@@ -4,7 +4,7 @@ import { defaultCodexCommand, type AppConfig } from "./config.js";
 import { createCodexChildEnvironment, type SpawnFn } from "./codexRunner.js";
 import { CODEX_EXECUTION_POLICY } from "./executionPolicy.js";
 
-const PINNED_CODEX_VERSION = [0, 149, 1] as const;
+const PINNED_CODEX_VERSION = [0, 160, 0] as const;
 const MAX_PROBE_OUTPUT_BYTES = 64 * 1024;
 const MAX_PROBE_TIMEOUT_MS = 10_000;
 const PROBE_TERMINATION_GRACE_MS = 1_000;
@@ -60,7 +60,7 @@ export async function assertCodexCapabilities(
   const version = parseCodexVersion(versionOutput.stdout);
 
   if (!isPinnedVersion(version)) {
-    throw new Error("CodexAPI requires exact Codex CLI 0.149.1.");
+    throw new Error("CodexAPI requires exact Codex CLI 0.160.0.");
   }
 
   const featureOutput = await runProbe(
@@ -323,7 +323,7 @@ function assertFeatureOutput(output: string): void {
   const features = new Map<string, CodexFeatureState>();
 
   for (const line of lines) {
-    const match = /^([a-z][a-z0-9_]*)\s+(.+?)\s+(true|false)$/.exec(line);
+    const match = /^([a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)*)\s+(.+?)\s+(true|false)$/.exec(line);
     if (!match) {
       throw new Error("Codex feature output contained a malformed row.");
     }
@@ -343,7 +343,10 @@ function assertFeatureOutput(output: string): void {
     }
     if (feature.enabled) {
       throw new Error(
-        `Codex ${name} feature is enabled despite the disable policy.`,
+        `Codex ${name} feature is enabled despite the disable policy.` +
+          (name === "unified_exec"
+            ? " Enforce unified_exec=false through the checked-in managed requirements in the service namespace; ordinary disable switches are insufficient."
+            : ""),
       );
     }
   }

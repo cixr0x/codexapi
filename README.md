@@ -4,9 +4,9 @@
 
 ## Capable isolated runtime
 
-The pinned package-local `@openai/codex@0.149.1` CLI starts only after capability attestation succeeds. Its fixed policy is `codexapi-capable-isolated-v2`: the checked-in `codexapi-runtime` profile enables live public-web research and `view_image`; immutable runner switches separately enable browser use (external and in-app), Code Mode, and the Code Mode host.
+The pinned package-local `@openai/codex@0.160.0` CLI starts only after capability attestation succeeds. Its fixed policy is `codexapi-capable-isolated-v2`: the checked-in `codexapi-runtime` profile enables live public-web research and `view_image`; immutable runner switches separately enable browser use (external and in-app), Code Mode, and the Code Mode host.
 
-CLI 0.149.1 is the newest stable release compatible with these isolation switches. Starting with 0.150.0, disabling `unified_exec` requires managed administrator requirements; ordinary disable switches restore it to enabled. Those releases, including 0.160.0, fail the existing startup attestation, so the service retains the compatible exact pin.
+CLI 0.160.0 is the current stable release verified for this upgrade. Disabling `unified_exec` requires managed administrator requirements; ordinary disable switches are insufficient. `deploy/codex-managed/requirements.toml` enforces `[features] unified_exec = false`. The production unit binds that directory read-only at `/etc/codex` inside its own mount namespace. Other Codex processes retain their existing system policy. systemd may create an empty host `/etc/codex` mountpoint directory when absent; it installs no host requirements file. Preserve any existing host policy and never copy this service policy into the machine-wide Codex directory. See [the official requirements reference](https://learn.chatgpt.com/docs/config-file/config-reference#requirementstoml).
 
 Shell tools, shell snapshots, and unified execution are disabled. A command-execution event from Codex fails the request closed. Requests inherit an empty MCP inventory, ignore user and project configuration, and run ephemerally. Codex execution uses a newly created per-request child workspace, removed after it is safe to clean up. `/var/lib/codexapi` is the sole explicit persistent `ReadWritePaths` area for those workspaces; `PrivateTmp` provides API-owned temporary storage for safe generic image downloads.
 
@@ -24,6 +24,7 @@ The verification client calls only `http://127.0.0.1:3001`, creates a random roo
 - `npm install` (installs the pinned native Codex CLI)
 - An existing dedicated `CODEX_HOME` with its own Codex authentication
 - An existing, empty, non-symlink `CODEX_WORKSPACE` outside this checkout and the current working directory
+- The checked-in runtime profile and managed requirements supplied through an isolated Linux service namespace
 
 Copy `.env.example` and set the two dedicated paths. The service accepts only these runtime settings:
 
@@ -38,11 +39,7 @@ Copy `.env.example` and set the two dedicated paths. The service accepts only th
 | `CODEX_CALL_LOGGING` | `false` | Enables local JSONL request logging |
 | `CODEX_CALL_LOG_DIR` | `.codexapi/logs` | JSONL log location when enabled |
 
-```powershell
-$env:CODEX_HOME = "C:\CodexAPI\home"
-$env:CODEX_WORKSPACE = "C:\CodexAPI\inference-workspace"
-npm run dev:codex
-```
+Native Windows development can install the pinned executable and run the test suite, but it cannot start this production policy unchanged. Codex 0.160.0 reads administrator requirements from `%ProgramData%\OpenAI\Codex\requirements.toml`; a requirements file under `CODEX_HOME` does not enforce this setting. This repository does not write that machine-wide policy. Startup fails closed when `unified_exec` remains enabled. The checked-in runtime profile also contains POSIX filesystem paths, so a Windows runtime would require a separately reviewed permission profile and administrator-managed execution boundary. Use Linux for the current service. Do not weaken the policy or reuse another user's credentials to make native Windows startup succeed. For local Linux development, provide the same read-only service namespace and dedicated profile/home/workspace before running the fixed `npm run dev:codex` command.
 
 ## Endpoints
 
@@ -125,5 +122,7 @@ npm test
 npm run typecheck
 npm run build
 ```
+
+The real CLI tests verify its exact version, required features, prohibited shell features, and rejection of unenforced unified execution on an ordinary host. Linux release gates must additionally set `CODEXAPI_TEST_REQUIRE_MANAGED_POLICY=1` inside a transient systemd namespace with `deploy/codex-managed` bound read-only to `/etc/codex`. This test-only setting requires successful startup attestation and verifies that `--enable unified_exec` cannot override managed requirements. It is never a server configuration setting. Use the sibling production runbook at `C:\PROJECTS\ludora\ludora-admin\docs\production-deployment.md` (VM: `/opt/ludora/ludora-admin/docs/production-deployment.md`) for the namespace command and deployment verification.
 
 Call logging can contain prompts and responses. Keep it off unless local diagnosis specifically requires it.

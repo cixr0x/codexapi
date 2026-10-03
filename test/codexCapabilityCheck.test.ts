@@ -107,18 +107,23 @@ const PINNED_FEATURE_OUTPUT = [
 
 function successfulProbe(featureOutput = PINNED_FEATURE_OUTPUT): ProbeSpawn {
   return createProbeSpawn([
-    { stdout: "codex-cli 0.149.1\n" },
+    { stdout: "codex-cli 0.160.0\n" },
     { stdout: featureOutput },
     { stdout: "[]\n" },
   ]);
 }
 
 describe("Codex capability startup check", () => {
+  it("accepts the dotted canonical feature names reported by CLI 0.160.0", async () => {
+    const spawn = successfulProbe(`${PINNED_FEATURE_OUTPUT}guardianv2.thread_context removed false\n`);
+    await expect(assertCodexCapabilities(testConfig(), spawn)).resolves.toMatchObject({ checked: true });
+  });
+
   it("accepts required capable features, prohibited shell features, and unrelated enabled features", async () => {
     const spawn = successfulProbe();
 
     await expect(assertCodexCapabilities(testConfig(), spawn)).resolves.toEqual({
-      version: "0.149.1",
+      version: "0.160.0",
       requiredFeatures: [
         "browser_use",
         "browser_use_external",
@@ -184,8 +189,8 @@ describe("Codex capability startup check", () => {
   });
 
   it.each([
-    ["an older version", "codex-cli 0.147.0\n", /requires exact Codex CLI 0\.149\.1/i],
-    ["a newer untested version", "codex-cli 0.149.2\n", /requires exact Codex CLI 0\.149\.1/i],
+    ["an older version", "codex-cli 0.147.0\n", /requires exact Codex CLI 0\.160\.0/i],
+    ["a newer untested version", "codex-cli 0.160.1\n", /requires exact Codex CLI 0\.160\.0/i],
     ["unparseable version output", "Codex version unknown\n", /version output was not recognized/i],
   ])("rejects %s before inspecting features", async (_name, versionOutput, message) => {
     const spawn = createProbeSpawn([{ stdout: versionOutput }]);
@@ -242,10 +247,25 @@ describe("Codex capability startup check", () => {
     },
   );
 
+  it("explains the managed policy requirement when unified execution remains enabled", async () => {
+    const spawn = successfulProbe(
+      PINNED_FEATURE_OUTPUT.replace("unified_exec stable false", "unified_exec stable true"),
+    );
+    await expect(assertCodexCapabilities(testConfig(), spawn)).rejects.toThrow(
+      /unified_exec.*managed requirements.*service namespace/i,
+    );
+    expect(spawn.calls).toHaveLength(2);
+  });
+
   it.each([
     [
       "a malformed nonblank row",
       `${PINNED_FEATURE_OUTPUT}malformed row\n`,
+      /feature output contained a malformed row/i,
+    ],
+    [
+      "an empty dotted feature segment",
+      `${PINNED_FEATURE_OUTPUT}guardianv2..thread_context removed false\n`,
       /feature output contained a malformed row/i,
     ],
     [
@@ -271,7 +291,7 @@ describe("Codex capability startup check", () => {
 
   it("rejects a nonempty MCP inventory", async () => {
     const spawn = createProbeSpawn([
-      { stdout: "codex-cli 0.149.1\n" },
+      { stdout: "codex-cli 0.160.0\n" },
       { stdout: PINNED_FEATURE_OUTPUT },
       { stdout: '[{"name":"unexpected"}]\n' },
     ]);

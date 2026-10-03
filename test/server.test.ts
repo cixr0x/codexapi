@@ -266,7 +266,7 @@ describe("Fastify server", () => {
     child.stderr = new EventEmitter();
     child.kill = vi.fn();
     const outputs = [
-      "codex-cli 0.149.1\n",
+      "codex-cli 0.160.0\n",
       [
         "shell_tool stable false",
         "shell_snapshot stable false",
@@ -298,7 +298,7 @@ describe("Fastify server", () => {
       expect(health.json()).toMatchObject({
         capabilityPolicy: "codexapi-capable-isolated-v2",
         codexCli: {
-          version: "0.149.1",
+          version: "0.160.0",
           requiredFeatures: [
             "browser_use",
             "browser_use_external",

@@ -115,13 +115,13 @@ describe("config", () => {
     const nativePackageJson = JSON.parse(
       readFileSync(join(nativePackageRoot, "package.json"), "utf8"),
     ) as { name?: string; version?: string };
-    expect(mainPackageJson.version).toBe("0.149.1");
+    expect(mainPackageJson.version).toBe("0.160.0");
     expect(mainPackageJson.optionalDependencies?.[target.packageName]).toBe(
-      `npm:@openai/codex@0.149.1-${target.suffix}`,
+      `npm:@openai/codex@0.160.0-${target.suffix}`,
     );
     expect(nativePackageJson).toMatchObject({
       name: "@openai/codex",
-      version: `0.149.1-${target.suffix}`,
+      version: `0.160.0-${target.suffix}`,
     });
   });
 

@@ -40,6 +40,7 @@ RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 CapabilityBoundingSet=
 AmbientCapabilities=
 ReadOnlyPaths=/opt/ludora/codexapi
+BindReadOnlyPaths=/opt/ludora/codexapi/deploy/codex-managed:/etc/codex
 ReadWritePaths=/var/lib/codexapi
 InaccessiblePaths=/opt/ludora/ludora-admin /home /root
 UMask=0077

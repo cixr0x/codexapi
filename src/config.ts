@@ -33,7 +33,7 @@ export interface CodexCommandDefault {
   args: string[];
 }
 
-const PINNED_CODEX_VERSION = "0.149.1";
+const PINNED_CODEX_VERSION = "0.160.0";
 export const CODEXAPI_FIXED_HOST = "127.0.0.1";
 export const CODEXAPI_FIXED_PORT = 3001;
 const requireFromHere = createRequire(import.meta.url);
