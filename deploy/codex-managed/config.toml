@@ -4,7 +4,6 @@ suppress_unstable_features_warning = true
 
 [tools]
 web_search = true
-view_image = true
 
 [permissions.codexapi-runtime]
 description = "Public-web research with request-workspace-only writes."

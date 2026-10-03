@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
+import { CODEX_EXECUTION_POLICY } from "../src/executionPolicy.js";
 
 const profile = readFileSync(
   new URL("../deploy/codexapi-runtime.config.toml", import.meta.url),
@@ -28,7 +29,8 @@ describe("CodexAPI capable runtime profile", () => {
     expect(profile).toContain('default_permissions = "codexapi-runtime"');
     expect(profile).toContain('web_search = "live"');
     expect(profile).toContain("suppress_unstable_features_warning = true");
-    expect(profile).toContain("view_image = true");
+    expect(profile).not.toMatch(/^view_image\s*=/m);
+    expect(CODEX_EXECUTION_POLICY.requiredFeatures).toContainEqual({ name: "view_image", maturity: "stable" });
     expect(profile).toContain('"/opt/ludora/ludora-admin" = "deny"');
     expect(profile).toContain('"/var/lib/codexapi/home" = "deny"');
     expect(profile).toContain("allow_local_binding = false");
