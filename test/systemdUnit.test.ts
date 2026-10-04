@@ -115,7 +115,7 @@ describe("production systemd unit", () => {
     expect(single(service!, "AmbientCapabilities")).toBe("");
     expect(single(service!, "ReadOnlyPaths")).toBe("/opt/ludora/codexapi");
     expect(single(service!, "BindReadOnlyPaths")).toBe(
-      "/opt/ludora/codexapi/deploy/codex-managed:/etc/codex",
+      "/opt/ludora/codexapi/deploy/codex-managed:/etc/codex /opt/ludora/codexapi/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl:/usr/local/lib/codexapi-cli",
     );
     expect(service!.get("InaccessiblePaths")).toEqual([
       "/opt/ludora/ludora-admin /home /root",

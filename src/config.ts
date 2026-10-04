@@ -1,4 +1,5 @@
-import { readFileSync, realpathSync } from "node:fs";
+import { lstatSync, readFileSync, realpathSync } from "node:fs";
+import type { Stats } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, isAbsolute, join, relative } from "node:path";
 
@@ -36,6 +37,7 @@ export interface CodexCommandDefault {
 const PINNED_CODEX_VERSION = "0.160.0";
 export const CODEXAPI_FIXED_HOST = "127.0.0.1";
 export const CODEXAPI_FIXED_PORT = 3001;
+export const CODEXAPI_LINUX_ARTIFACT_ALIAS = "/usr/local/lib/codexapi-cli";
 const requireFromHere = createRequire(import.meta.url);
 
 interface NativeCodexTarget {
@@ -126,7 +128,59 @@ export function defaultCodexCommand(): CodexCommandDefault {
     "Resolved Codex executable must stay inside the pinned native package.",
   );
 
+  if (process.platform === "linux") {
+    const artifactRoot = realpathSync.native(
+      join(nativePackageRoot, "vendor", target.targetTriple),
+    );
+    assertContainedAbsolutePath(
+      nativePackageRoot,
+      artifactRoot,
+      "Resolved Codex artifacts must stay inside the pinned native package.",
+    );
+    return { command: resolveLinuxCodexArtifactAlias(artifactRoot, command), args: [] };
+  }
+
   return { command, args: [] };
+}
+
+interface ArtifactFilesystem {
+  canonicalPath(path: string): string;
+  inspectPath(path: string): Pick<Stats, "dev" | "ino" | "mode" | "isDirectory" | "isFile" | "isSymbolicLink">;
+}
+
+export function resolveLinuxCodexArtifactAlias(
+  sourceRoot: string,
+  sourceCommand: string,
+  filesystem: ArtifactFilesystem = {
+    canonicalPath: realpathSync.native,
+    inspectPath: lstatSync,
+  },
+): string {
+  // A bind alias preserves the pinned package's adjacent public resources while
+  // keeping its source checkout hidden from the inner filesystem sandbox.
+  const aliasCommand = `${CODEXAPI_LINUX_ARTIFACT_ALIAS}/bin/codex`;
+  try {
+    const sourceDirectory = filesystem.inspectPath(sourceRoot);
+    const sourceExecutable = filesystem.inspectPath(sourceCommand);
+    const aliasDirectory = filesystem.inspectPath(CODEXAPI_LINUX_ARTIFACT_ALIAS);
+    const aliasExecutable = filesystem.inspectPath(aliasCommand);
+    if (
+      !sourceDirectory.isDirectory() || sourceDirectory.isSymbolicLink() ||
+      !aliasDirectory.isDirectory() || aliasDirectory.isSymbolicLink() ||
+      !sourceExecutable.isFile() || sourceExecutable.isSymbolicLink() ||
+      !aliasExecutable.isFile() || aliasExecutable.isSymbolicLink() ||
+      (sourceExecutable.mode & 0o111) === 0 || (aliasExecutable.mode & 0o111) === 0 ||
+      filesystem.canonicalPath(CODEXAPI_LINUX_ARTIFACT_ALIAS) !== CODEXAPI_LINUX_ARTIFACT_ALIAS ||
+      filesystem.canonicalPath(aliasCommand) !== aliasCommand ||
+      aliasDirectory.dev !== sourceDirectory.dev || aliasDirectory.ino !== sourceDirectory.ino ||
+      aliasExecutable.dev !== sourceExecutable.dev || aliasExecutable.ino !== sourceExecutable.ino
+    ) {
+      throw new Error("invalid artifact alias");
+    }
+  } catch {
+    throw new Error("Pinned Codex Linux artifact alias is missing or does not match the installed native package.");
+  }
+  return aliasCommand;
 }
 
 export function assertFixedListenerConfig(

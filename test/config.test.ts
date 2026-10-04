@@ -5,7 +5,7 @@ import { dirname, isAbsolute, join, relative } from "node:path";
 
 import { afterAll, describe, expect, it, vi } from "vitest";
 
-import { defaultCodexCommand, loadConfig } from "../src/config.js";
+import { CODEXAPI_LINUX_ARTIFACT_ALIAS, defaultCodexCommand, loadConfig } from "../src/config.js";
 
 const SAFE_WORKSPACE = mkdtempSync(join(tmpdir(), "codexapi-config-test-"));
 const SAFE_CODEX_HOME = mkdtempSync(join(tmpdir(), "codexapi-home-test-"));
@@ -99,9 +99,11 @@ describe("config", () => {
       ),
     );
 
-    expect(resolved.command).toBe(expectedExecutable);
+    expect(resolved.command).toBe(
+      process.platform === "linux" ? `${CODEXAPI_LINUX_ARTIFACT_ALIAS}/bin/codex` : expectedExecutable,
+    );
     expect(isAbsolute(resolved.command)).toBe(true);
-    expect(relative(nativePackageRoot, resolved.command)).not.toMatch(
+    expect(relative(nativePackageRoot, expectedExecutable)).not.toMatch(
       /^\.\.(?:[\\/]|$)/,
     );
     expect(resolved.args).toEqual([]);
