@@ -13,6 +13,12 @@ const CODE_MODE_DISABLED_WARNING =
   "Code Mode is unavailable because code-mode host is disabled. Code mode will fail closed; enable `features.code_mode_host` and install `codex-code-mode-host`.";
 const UNSTABLE_FEATURES_WARNING =
   "Under-development features enabled: code_mode. Under-development features are incomplete and may behave unpredictably. To suppress this warning, set `suppress_unstable_features_warning = true` in /var/lib/codexapi/home/config.toml.";
+// CLI 0.160 emits these config advisories twice through its startup warning
+// paths. Keep the full deny rules; accept only their exact pinned diagnostics.
+const FILESYSTEM_DENY_GLOB_WARNINGS = new Set([
+  ":workspace_roots/**/.env", ":workspace_roots/**/.env.*",
+].map(filesystemDenyGlobWarning));
+const MAX_FILESYSTEM_DENY_GLOB_WARNING_COPIES = 2;
 const REQUEST_WORKSPACE_CLEANUP_ATTEMPTS = 3;
 const REQUEST_WORKSPACE_CLEANUP_RETRY_DELAY_MS = 25;
 
@@ -607,6 +613,7 @@ function parseCodexOutput(
   let usage: CodexUsage | undefined;
   let phase: "thread" | "turn" | "active" | "completed" = "thread";
   let preTurnWarningState: PreTurnWarningState = "none";
+  const filesystemWarningCounts = new Map<string, number>();
 
   for (const line of rawStdout.split(/\r?\n/)) {
     if (!line.trim()) {
@@ -665,21 +672,23 @@ function parseCodexOutput(
       }
 
       if (phase === "turn") {
-        const nextWarningState: PreTurnWarningState | undefined =
-          event.type === "item.completed" && itemType === "error"
-            ? acceptPreTurnWarning(
-                preTurnWarningState,
-                event.item.message,
-                model,
-              )
-            : undefined;
-        if (
-          existing ||
-          nextWarningState === undefined
-        ) {
+        if (existing || event.type !== "item.completed" || itemType !== "error") {
           throw new Error("Codex JSONL output contained an invalid pre-turn item.");
         }
-        preTurnWarningState = nextWarningState;
+        const message = event.item.message;
+        if (typeof message === "string" && FILESYSTEM_DENY_GLOB_WARNINGS.has(message)) {
+          const count = filesystemWarningCounts.get(message) ?? 0;
+          if (count >= MAX_FILESYSTEM_DENY_GLOB_WARNING_COPIES) {
+            throw new Error("Codex JSONL output contained an invalid pre-turn item.");
+          }
+          filesystemWarningCounts.set(message, count + 1);
+        } else {
+          const nextWarningState = acceptPreTurnWarning(preTurnWarningState, message, model);
+          if (nextWarningState === undefined) {
+            throw new Error("Codex JSONL output contained an invalid pre-turn item.");
+          }
+          preTurnWarningState = nextWarningState;
+        }
         items.set(itemId, { type: "error", status: "completed" });
         continue;
       }
@@ -801,6 +810,10 @@ function acceptPreTurnWarning(
 
 function unsupportedCodeModeWarning(model: string): string {
   return `Code Mode is enabled in configuration, but model \`${model}\` does not advertise Code Mode support. This may degrade model performance. Disable \`features.code_mode\` and \`features.code_mode_only\`, or select a model whose metadata enables Code Mode.`;
+}
+
+function filesystemDenyGlobWarning(pattern: string): string {
+  return `Filesystem deny-read glob \`${pattern}\` uses \`**\`. Non-macOS sandboxing does not support unbounded \`**\` natively; set \`glob_scan_max_depth\` in this filesystem profile to cap Linux glob expansion and silence this warning, or enumerate explicit depths such as \`*.env\`, \`*/*.env\`, and \`*/*/*.env\`.`;
 }
 
 function parseRecord(line: string): Record<string, unknown> | undefined {

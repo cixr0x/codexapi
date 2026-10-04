@@ -76,6 +76,11 @@ const CODE_MODE_DISABLED_WARNING =
   "Code Mode is unavailable because code-mode host is disabled. Code mode will fail closed; enable `features.code_mode_host` and install `codex-code-mode-host`.";
 const UNSTABLE_FEATURES_WARNING =
   "Under-development features enabled: code_mode. Under-development features are incomplete and may behave unpredictably. To suppress this warning, set `suppress_unstable_features_warning = true` in /var/lib/codexapi/home/config.toml.";
+function denyReadGlobWarning(pattern: string): string {
+  return `Filesystem deny-read glob \`${pattern}\` uses \`**\`. Non-macOS sandboxing does not support unbounded \`**\` natively; set \`glob_scan_max_depth\` in this filesystem profile to cap Linux glob expansion and silence this warning, or enumerate explicit depths such as \`*.env\`, \`*/*.env\`, and \`*/*/*.env\`.`;
+}
+const ENV_DENY_WARNING = denyReadGlobWarning(":workspace_roots/**/.env");
+const ENV_VARIANT_DENY_WARNING = denyReadGlobWarning(":workspace_roots/**/.env.*");
 const UNSUPPORTED_CODE_MODE_WARNING =
   "Code Mode is enabled in configuration, but model `gpt-5.5` does not advertise Code Mode support. This may degrade model performance. Disable `features.code_mode` and `features.code_mode_only`, or select a model whose metadata enables Code Mode.";
 
@@ -857,6 +862,47 @@ describe("Codex runner", () => {
     await expect(
       runJsonl(rawStdout, { model: "gpt-5.5" }),
     ).resolves.toMatchObject({ stdout: "safe answer" });
+  });
+
+  it.each([
+    [ENV_DENY_WARNING, ENV_VARIANT_DENY_WARNING],
+    [ENV_DENY_WARNING, ENV_VARIANT_DENY_WARNING, ENV_DENY_WARNING, ENV_VARIANT_DENY_WARNING, CODE_MODE_DISABLED_WARNING],
+  ])("accepts only the pinned startup deny-glob diagnostics, including the observed duplicate emission (%j)", async (...warnings) => {
+    const rawStdout = completionWithPreTurnWarnings(warnings.map((message, index) => preTurnWarning(`glob-warning-${index}`, message)));
+    await expect(runJsonl(rawStdout)).resolves.toMatchObject({ stdout: "safe answer", rawStdout });
+  });
+
+  it("keeps ordered Code Mode warnings valid when exact deny-glob warnings are interleaved", async () => {
+    const rawStdout = completionWithPreTurnWarnings([
+      preTurnWarning("g-1", UNSTABLE_FEATURES_WARNING),
+      preTurnWarning("g-2", ENV_DENY_WARNING),
+      preTurnWarning("g-3", ENV_VARIANT_DENY_WARNING),
+      preTurnWarning("g-4", UNSUPPORTED_CODE_MODE_WARNING),
+    ]);
+    await expect(runJsonl(rawStdout, { model: "gpt-5.5" })).resolves.toMatchObject({ stdout: "safe answer" });
+  });
+
+  it.each([
+    ["another pattern", [preTurnWarning("g-1", denyReadGlobWarning("/tmp/**/.env"))]],
+    ["changed warning text", [preTurnWarning("g-1", `${ENV_DENY_WARNING} extra`)]],
+    ["a non-string message", [{ type: "item.completed", item: { id: "g-1", type: "error", message: null } }]],
+    ["more than two copies of a pattern", [preTurnWarning("g-1", ENV_DENY_WARNING), preTurnWarning("g-2", ENV_DENY_WARNING), preTurnWarning("g-3", ENV_DENY_WARNING)]],
+    ["a reused warning item id", [preTurnWarning("g-1", ENV_DENY_WARNING), preTurnWarning("g-1", ENV_DENY_WARNING)]],
+    ["a started error instead of a completed warning", [{ type: "item.started", item: { id: "g-1", type: "error", message: ENV_DENY_WARNING } }]],
+    ["a reordered existing code-mode sequence", [preTurnWarning("g-1", ENV_DENY_WARNING), preTurnWarning("g-2", UNSUPPORTED_CODE_MODE_WARNING), preTurnWarning("g-3", UNSTABLE_FEATURES_WARNING)]],
+  ])("rejects startup deny-glob diagnostics with %s", async (_name, warnings) => {
+    await expect(runJsonl(completionWithPreTurnWarnings(warnings), { model: "gpt-5.5" }))
+      .rejects.toMatchObject({ code: "INVALID_OUTPUT" });
+  });
+
+  it("rejects an exact deny-glob warning after the turn starts", async () => {
+    const rawStdout = [
+      JSON.stringify({ type: "thread.started", thread_id: "thread-1" }),
+      JSON.stringify({ type: "turn.started" }),
+      JSON.stringify(preTurnWarning("g-1", ENV_DENY_WARNING)),
+      JSON.stringify({ type: "turn.completed", usage: VALID_USAGE }),
+    ].join("\n");
+    await expect(runJsonl(rawStdout)).rejects.toMatchObject({ code: "INVALID_OUTPUT" });
   });
 
   it.each([
