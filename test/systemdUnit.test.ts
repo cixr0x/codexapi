@@ -104,6 +104,12 @@ describe("production systemd unit", () => {
     expect(single(service!, "NoNewPrivileges")).toBe("true");
     expect(single(service!, "ProtectSystem")).toBe("strict");
     expect(single(service!, "PrivateTmp")).toBe("true");
+    expect(single(service!, "RestrictAddressFamilies").split(/\s+/u)).toEqual([
+      "AF_UNIX",
+      "AF_INET",
+      "AF_INET6",
+      "AF_NETLINK",
+    ]);
     expect(single(service!, "ProtectHome")).toBe("true");
     expect(single(service!, "CapabilityBoundingSet")).toBe("");
     expect(single(service!, "AmbientCapabilities")).toBe("");
