@@ -1,6 +1,8 @@
 import { spawn as nodeSpawn, type ChildProcess, type SpawnOptions } from "node:child_process";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { reconnectProgress, terminalDiagnostic, type CodexDiagnostics } from "./codexDiagnostics.js";
+import { CodexStartupWarnings } from "./codexWarnings.js";
 
 import { CODEX_EXECUTION_POLICY } from "./executionPolicy.js";
 import {
@@ -9,16 +11,6 @@ import {
   type RequestWorkspaceFactory,
 } from "./requestWorkspace.js";
 
-const CODE_MODE_DISABLED_WARNING =
-  "Code Mode is unavailable because code-mode host is disabled. Code mode will fail closed; enable `features.code_mode_host` and install `codex-code-mode-host`.";
-const UNSTABLE_FEATURES_WARNING =
-  "Under-development features enabled: code_mode. Under-development features are incomplete and may behave unpredictably. To suppress this warning, set `suppress_unstable_features_warning = true` in /var/lib/codexapi/home/config.toml.";
-// CLI 0.160 emits these config advisories twice through its startup warning
-// paths. Keep the full deny rules; accept only their exact pinned diagnostics.
-const FILESYSTEM_DENY_GLOB_WARNINGS = new Set([
-  ":workspace_roots/**/.env", ":workspace_roots/**/.env.*",
-].map(filesystemDenyGlobWarning));
-const MAX_FILESYSTEM_DENY_GLOB_WARNING_COPIES = 2;
 const REQUEST_WORKSPACE_CLEANUP_ATTEMPTS = 3;
 const REQUEST_WORKSPACE_CLEANUP_RETRY_DELAY_MS = 25;
 
@@ -28,6 +20,7 @@ export type CodexRunnerErrorCode =
   | "TIMEOUT"
   | "CANCELLED"
   | "TERMINATION_FAILED"
+  | "CLEANUP_FAILED"
   | "INVALID_OUTPUT";
 
 export class CodexRunnerError extends Error {
@@ -38,6 +31,9 @@ export class CodexRunnerError extends Error {
   readonly command?: CodexCommandDetails;
   readonly childMayBeRunning: boolean;
   readonly cleanupWhenSafe?: Promise<void>;
+  readonly captureComplete: boolean;
+  readonly originalRunnerCode?: CodexRunnerErrorCode;
+  diagnostics?: CodexDiagnostics;
 
   constructor({
     message,
@@ -48,6 +44,8 @@ export class CodexRunnerError extends Error {
     command,
     childMayBeRunning = false,
     cleanupWhenSafe,
+    captureComplete = true,
+    originalRunnerCode,
   }: {
     message: string;
     code: CodexRunnerErrorCode;
@@ -57,6 +55,8 @@ export class CodexRunnerError extends Error {
     command?: CodexCommandDetails;
     childMayBeRunning?: boolean;
     cleanupWhenSafe?: Promise<void>;
+    captureComplete?: boolean;
+    originalRunnerCode?: CodexRunnerErrorCode;
   }) {
     super(message);
     this.name = "CodexRunnerError";
@@ -67,6 +67,8 @@ export class CodexRunnerError extends Error {
     this.command = command;
     this.childMayBeRunning = childMayBeRunning;
     this.cleanupWhenSafe = cleanupWhenSafe;
+    this.captureComplete = captureComplete;
+    this.originalRunnerCode = originalRunnerCode;
   }
 }
 
@@ -121,6 +123,7 @@ export interface CodexRunResult {
   stderr: string;
   usage?: CodexUsage;
   command?: CodexCommandDetails;
+  diagnostics?: CodexDiagnostics;
 }
 
 export interface CodexRunner {
@@ -131,6 +134,7 @@ export interface CodexRunner {
 interface ParsedCodexOutput {
   output: string;
   usage?: CodexUsage;
+  reconnectCount: number;
 }
 
 interface ParsedItemLifecycle {
@@ -168,6 +172,92 @@ export async function runCodexPromptWithDetails(
   config: CodexRunnerConfig,
   options: CodexRunOptions = {},
 ): Promise<CodexRunResult> {
+  const startedAt = performance.now();
+  const deadline = startedAt + config.timeoutMs;
+  let reconnectCount = 0;
+  let upstreamStatus: 502 | 503 | 504 | undefined;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const result = await runCodexAttempt(prompt, config, options, deadline);
+      reconnectCount += result.diagnostics?.reconnectCount ?? 0;
+      if (options.signal?.aborted) throw cancelledRunnerError();
+      if (performance.now() >= deadline) throw deadlineRunnerError();
+      result.diagnostics = {
+        attemptCount: attempt,
+        elapsedMs: Math.round(performance.now() - startedAt),
+        failureCategory: attempt > 1 || reconnectCount > 0 ? "recovered" : "none",
+        reconnectCount,
+        captureComplete: true,
+        ...(upstreamStatus === undefined ? {} : { upstreamStatus }),
+      };
+      return result;
+    } catch (caughtError) {
+      let error = caughtError instanceof CodexRunnerError ? caughtError : new CodexRunnerError({ code: "SPAWN_ERROR", message: "Codex request setup failed." });
+      if (options.signal?.aborted && !error.childMayBeRunning && error.code !== "CLEANUP_FAILED" && error.code !== "CANCELLED") {
+        error = new CodexRunnerError({
+          code: "CANCELLED", message: "Codex command was cancelled.",
+          originalRunnerCode: error.code, exitCode: error.exitCode,
+          stdout: error.stdout, stderr: error.stderr, captureComplete: error.captureComplete,
+        });
+      }
+      const diagnostic = terminalDiagnostic(error.stdout ?? "", error.stderr ?? "", error.captureComplete, options.model);
+      reconnectCount += diagnostic.reconnectCount;
+      upstreamStatus = diagnostic.upstreamStatus ?? upstreamStatus;
+      error.diagnostics = {
+        attemptCount: attempt,
+        elapsedMs: Math.round(performance.now() - startedAt),
+        runnerCode: error.code,
+        ...(error.originalRunnerCode === undefined ? {} : { originalRunnerCode: error.originalRunnerCode }),
+        ...(error.exitCode === undefined ? {} : { exitCode: error.exitCode }),
+        failureCategory: runnerFailureCategory(error.code, diagnostic.captureComplete, diagnostic.upstreamStatus),
+        reconnectCount,
+        captureComplete: diagnostic.captureComplete,
+        ...(diagnostic.upstreamStatus === undefined ? {} : { upstreamStatus: diagnostic.upstreamStatus }),
+      };
+      if (error.code !== "NON_ZERO_EXIT" || !Number.isInteger(error.exitCode) || error.childMayBeRunning || diagnostic.upstreamStatus === undefined || attempt === 3 || options.signal?.aborted) throw error;
+      const remainingMs = deadline - performance.now();
+      const delayMs = attempt * 1000 + Math.floor(Math.random() * 251);
+      if (remainingMs <= delayMs) {
+        const timeout = deadlineRunnerError();
+        timeout.diagnostics = { ...error.diagnostics, runnerCode: "TIMEOUT", failureCategory: "timeout" };
+        throw timeout;
+      }
+      try { await waitForRetry(delayMs, options.signal); }
+      catch (cancelled) {
+        if (cancelled instanceof CodexRunnerError) cancelled.diagnostics = { ...error.diagnostics, runnerCode: "CANCELLED", failureCategory: "cancelled", elapsedMs: Math.round(performance.now() - startedAt) };
+        throw cancelled;
+      }
+    }
+  }
+  throw deadlineRunnerError();
+}
+
+function deadlineRunnerError(): CodexRunnerError {
+  return new CodexRunnerError({ code: "TIMEOUT", message: "Codex command timed out." });
+}
+
+function runnerFailureCategory(code: CodexRunnerErrorCode, captureComplete: boolean, upstreamStatus?: number): CodexDiagnostics["failureCategory"] {
+  switch (code) {
+    case "CLEANUP_FAILED": return "cleanup_failed";
+    case "TIMEOUT": return "timeout";
+    case "CANCELLED": return "cancelled";
+    case "TERMINATION_FAILED": return "termination_failed";
+    case "SPAWN_ERROR": return "startup_failed";
+    case "INVALID_OUTPUT": return captureComplete ? "invalid_output" : "incomplete_capture";
+    case "NON_ZERO_EXIT": return !captureComplete ? "incomplete_capture" : upstreamStatus === undefined ? "unknown_cli_failure" : "upstream_transient";
+  }
+}
+
+function waitForRetry(delayMs: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.reject(cancelledRunnerError());
+  return new Promise((resolve, reject) => {
+    const onAbort = () => { clearTimeout(timer); signal?.removeEventListener("abort", onAbort); reject(cancelledRunnerError()); };
+    const timer = setTimeout(() => { signal?.removeEventListener("abort", onAbort); resolve(); }, delayMs);
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+async function runCodexAttempt(prompt: string, config: CodexRunnerConfig, options: CodexRunOptions, deadline: number): Promise<CodexRunResult> {
   if (options.signal?.aborted) {
     throw cancelledRunnerError();
   }
@@ -179,6 +269,7 @@ export async function runCodexPromptWithDetails(
   const cleanupDelay =
     config.requestWorkspaceCleanupDelay ?? waitForRequestWorkspaceCleanupRetry;
   let cleanupSafe = true;
+  let originalError: unknown;
 
   try {
     const outputSchemaPath =
@@ -188,14 +279,18 @@ export async function runCodexPromptWithDetails(
     if (outputSchemaPath) {
       await writeFile(outputSchemaPath, JSON.stringify(options.outputSchema), "utf8");
     }
+    if (options.signal?.aborted) throw cancelledRunnerError();
+    const remainingMs = deadline - performance.now();
+    if (remainingMs <= 0) throw deadlineRunnerError();
     return await runCodexProcess(
       prompt,
-      config,
+      { ...config, timeoutMs: remainingMs },
       options,
       requestWorkspace.path,
       outputSchemaPath,
     );
   } catch (error) {
+    originalError = error;
     if (error instanceof CodexRunnerError && error.childMayBeRunning) {
       cleanupSafe = false;
       if (error.cleanupWhenSafe) {
@@ -209,7 +304,19 @@ export async function runCodexPromptWithDetails(
     throw error;
   } finally {
     if (cleanupSafe) {
-      await cleanupRequestWorkspace(requestWorkspace, cleanupDelay);
+      try { await cleanupRequestWorkspace(requestWorkspace, cleanupDelay); }
+      catch {
+        const original = originalError instanceof CodexRunnerError ? originalError : undefined;
+        throw new CodexRunnerError({
+          message: "Codex request workspace cleanup failed.",
+          code: "CLEANUP_FAILED",
+          originalRunnerCode: original?.code,
+          exitCode: original?.exitCode,
+          stdout: original?.stdout,
+          stderr: original?.stderr,
+          captureComplete: original?.captureComplete,
+        });
+      }
     }
   }
 }
@@ -371,6 +478,7 @@ function runCodexProcess(
               stdout: rawStdout,
               stderr: finalStderr,
               command: commandDetails,
+              captureComplete: !stdout.exceeded && !stderr.exceeded,
             }),
           );
           return;
@@ -384,6 +492,7 @@ function runCodexProcess(
               stdout: rawStdout,
               stderr: finalStderr,
               command: commandDetails,
+              captureComplete: false,
             }),
           );
           return;
@@ -397,6 +506,7 @@ function runCodexProcess(
             stderr: finalStderr,
             usage: parsed.usage,
             command: commandDetails,
+            diagnostics: { attemptCount: 1, elapsedMs: 0, failureCategory: parsed.reconnectCount > 0 ? "recovered" : "none", reconnectCount: parsed.reconnectCount, captureComplete: true },
           });
         } catch (error) {
           reject(
@@ -612,8 +722,10 @@ function parseCodexOutput(
   const items = new Map<string, ParsedItemLifecycle>();
   let usage: CodexUsage | undefined;
   let phase: "thread" | "turn" | "active" | "completed" = "thread";
-  let preTurnWarningState: PreTurnWarningState = "none";
-  const filesystemWarningCounts = new Map<string, number>();
+  const startupWarnings = new CodexStartupWarnings(model);
+  let lastReconnect = 0;
+  let reconnectCount = 0;
+  let outputAfterReconnect = true;
 
   for (const line of rawStdout.split(/\r?\n/)) {
     if (!line.trim()) {
@@ -647,6 +759,15 @@ function parseCodexOutput(
       continue;
     }
 
+    if (event.type === "error" && phase === "active") {
+      const progress = reconnectProgress(event.message);
+      if (progress === undefined || progress <= lastReconnect) throw new Error("Codex JSONL output contained an invalid reconnect diagnostic.");
+      lastReconnect = progress;
+      reconnectCount++;
+      outputAfterReconnect = false;
+      continue;
+    }
+
     if (
       event.type === "item.started" ||
       event.type === "item.updated" ||
@@ -675,20 +796,7 @@ function parseCodexOutput(
         if (existing || event.type !== "item.completed" || itemType !== "error") {
           throw new Error("Codex JSONL output contained an invalid pre-turn item.");
         }
-        const message = event.item.message;
-        if (typeof message === "string" && FILESYSTEM_DENY_GLOB_WARNINGS.has(message)) {
-          const count = filesystemWarningCounts.get(message) ?? 0;
-          if (count >= MAX_FILESYSTEM_DENY_GLOB_WARNING_COPIES) {
-            throw new Error("Codex JSONL output contained an invalid pre-turn item.");
-          }
-          filesystemWarningCounts.set(message, count + 1);
-        } else {
-          const nextWarningState = acceptPreTurnWarning(preTurnWarningState, message, model);
-          if (nextWarningState === undefined) {
-            throw new Error("Codex JSONL output contained an invalid pre-turn item.");
-          }
-          preTurnWarningState = nextWarningState;
-        }
+        if (!startupWarnings.accept(event.item.message)) throw new Error("Codex JSONL output contained an invalid pre-turn item.");
         items.set(itemId, { type: "error", status: "completed" });
         continue;
       }
@@ -707,6 +815,7 @@ function parseCodexOutput(
         }
         items.set(itemId, { type: "agent_message", status: "completed" });
         messages.push(event.item.text);
+        outputAfterReconnect = true;
         continue;
       }
       if (itemType === "reasoning") {
@@ -781,39 +890,9 @@ function parseCodexOutput(
   if (output === undefined) {
     throw new Error("Codex JSONL output did not contain a completed agent message.");
   }
+  if (!outputAfterReconnect) throw new Error("Codex JSONL output did not contain final output after reconnecting.");
 
-  return { output: output.trimEnd(), usage };
-}
-
-type PreTurnWarningState = "none" | "unstable" | "unsupported" | "disabled";
-
-function acceptPreTurnWarning(
-  state: PreTurnWarningState,
-  message: unknown,
-  model: string | undefined,
-): PreTurnWarningState | undefined {
-  if (state === "none" && message === CODE_MODE_DISABLED_WARNING) {
-    return "disabled";
-  }
-  if (state === "none" && message === UNSTABLE_FEATURES_WARNING) {
-    return "unstable";
-  }
-  if (
-    (state === "none" || state === "unstable") &&
-    model !== undefined &&
-    message === unsupportedCodeModeWarning(model)
-  ) {
-    return "unsupported";
-  }
-  return undefined;
-}
-
-function unsupportedCodeModeWarning(model: string): string {
-  return `Code Mode is enabled in configuration, but model \`${model}\` does not advertise Code Mode support. This may degrade model performance. Disable \`features.code_mode\` and \`features.code_mode_only\`, or select a model whose metadata enables Code Mode.`;
-}
-
-function filesystemDenyGlobWarning(pattern: string): string {
-  return `Filesystem deny-read glob \`${pattern}\` uses \`**\`. Non-macOS sandboxing does not support unbounded \`**\` natively; set \`glob_scan_max_depth\` in this filesystem profile to cap Linux glob expansion and silence this warning, or enumerate explicit depths such as \`*.env\`, \`*/*.env\`, and \`*/*/*.env\`.`;
+  return { output: output.trimEnd(), usage, reconnectCount };
 }
 
 function parseRecord(line: string): Record<string, unknown> | undefined {

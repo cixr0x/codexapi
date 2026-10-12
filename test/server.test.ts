@@ -122,7 +122,7 @@ async function tempDir(): Promise<string> {
 }
 
 describe("Fastify server", () => {
-  it("does not treat a fully received live request body as a client disconnect", async () => {
+  it.each(["/v1/responses", "/v1/chat/completions"])("does not treat a fully received live request body as a disconnect on %s", async (endpoint) => {
     const { runner, runWithDetails } = fakeDetailedRunner("READY");
     const defaultRun = runWithDetails.getMockImplementation();
     runWithDetails.mockImplementation(async (...args) => {
@@ -144,13 +144,13 @@ describe("Fastify server", () => {
       }
 
       const response = await fetch(
-        `http://127.0.0.1:${address.port}/v1/responses`,
+        `http://127.0.0.1:${address.port}${endpoint}`,
         {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
             model: "gpt-5.6-terra",
-            input: "Return exactly READY.",
+            ...(endpoint === "/v1/responses" ? { input: "Return exactly READY." } : { messages: [{ role: "user", content: "Return exactly READY." }] }),
           }),
         },
       );
@@ -161,7 +161,7 @@ describe("Fastify server", () => {
     }
   });
 
-  it("aborts a live request only when the client disconnects before the response", async () => {
+  it.each(["/v1/responses", "/v1/chat/completions"])("aborts a live request only when the client disconnects before the response on %s", async (endpoint) => {
     let notifyRunnerStarted!: () => void;
     const runnerStarted = new Promise<void>((resolve) => {
       notifyRunnerStarted = resolve;
@@ -204,12 +204,12 @@ describe("Fastify server", () => {
       }
       const body = JSON.stringify({
         model: "gpt-5.6-terra",
-        input: "Wait for disconnect.",
+        ...(endpoint === "/v1/responses" ? { input: "Wait for disconnect." } : { messages: [{ role: "user", content: "Wait for disconnect." }] }),
       });
       const clientRequest = httpRequest({
         host: "127.0.0.1",
         port: address.port,
-        path: "/v1/responses",
+        path: endpoint,
         method: "POST",
         headers: {
           "content-type": "application/json",
@@ -440,6 +440,7 @@ describe("Fastify server", () => {
       model: "gpt-5.6-terra",
       reasoningEffort: "medium",
       imagePaths: [],
+      signal: expect.any(AbortSignal),
     });
     await app.close();
   });
@@ -1692,6 +1693,7 @@ describe("Fastify server", () => {
       model: "gpt-5.6-sol",
       reasoningEffort: "high",
       imagePaths: [],
+      signal: expect.any(AbortSignal),
     });
     await chatApp.close();
 

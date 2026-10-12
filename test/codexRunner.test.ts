@@ -288,6 +288,7 @@ describe("Codex runner", () => {
 
     await expect(resultPromise).resolves.toEqual({
       stdout: "OK",
+      diagnostics: { attemptCount: 1, elapsedMs: expect.any(Number), failureCategory: "none", reconnectCount: 0, captureComplete: true },
       rawStdout,
       stderr: "skill loader warning",
       usage: {
@@ -595,7 +596,7 @@ describe("Codex runner", () => {
       child.stdout.push(`${jsonlCompletion("OK")}\n`);
       child.close(0);
 
-      await expect(resultPromise).rejects.toBe(cleanupFailure);
+      await expect(resultPromise).rejects.toMatchObject({ code: "CLEANUP_FAILED", message: "Codex request workspace cleanup failed." });
       expect(requestWorkspace.cleanup).toHaveBeenCalledTimes(3);
       expect(cleanupDelay).toHaveBeenCalledTimes(2);
       await expect(access(requestWorkspace.path)).resolves.toBeUndefined();

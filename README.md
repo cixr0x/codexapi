@@ -38,7 +38,7 @@ Copy `.env.example` and set the two dedicated paths. The service accepts only th
 | `PORT` | `3001` | Fixed and enforced local API port |
 | `CODEX_HOME` | required | Dedicated Codex home and authentication boundary |
 | `CODEX_WORKSPACE` | required | Empty base directory for isolated request workspaces |
-| `CODEX_TIMEOUT_MS` | `120000` | Per-request Codex timeout |
+| `CODEX_TIMEOUT_MS` | `120000` | Overall generation budget, including attempt setup, cleanup and retry waits |
 | `CODEX_REASONING_EFFORT` | `medium` | Default reasoning effort |
 | `CODEX_CALL_LOGGING` | `false` | Enables local JSONL request logging |
 | `CODEX_CALL_LOG_DIR` | `.codexapi/logs` | JSONL log location when enabled |
@@ -57,6 +57,10 @@ Streaming is not supported. `stream: true` receives an OpenAI-style `400`.
 Both POST endpoints require an explicit `model` string. Omitted, null, non-string, empty, and whitespace-only values receive an OpenAI-style HTTP `400` error with `param: "model"` and `code: "invalid_model"` before Codex runs. The server trims the supplied ID and forwards it to the pinned CLI without a local allowlist. Model availability is decided by Codex and the configured account; CodexAPI has no server model default and no longer maintains or discovers a model catalog. `GET /v1/models` remains compatible and always returns `{ "object": "list", "data": [] }`. The built-in web tester requires an editable model ID.
 
 Verified upstream rejections of the requested model (the ChatGPT-account unsupported-model message and the model-does-not-exist/no-access message) receive a sanitized HTTP `400` `invalid_model` response. Classification uses fatal CLI events or explicit error diagnostics and matches the requested ID. Unrecognized failures retain generic CLI errors; Code Mode compatibility warnings remain separate. CLI stdout, stderr, paths, URLs, and authentication details are never included in those error responses.
+
+CodexAPI accepts the pinned CLI's recognized active-turn reconnect progress only when a fresh final agent message, a valid completed turn and exit code zero follow. It owns at most three CLI invocations for complete, verified terminal upstream HTTP 502/503/504 failures, with roughly one-second then two-second backoff plus up to 250 ms jitter. All attempts share one monotonic `CODEX_TIMEOUT_MS` budget; the CLI's own internal reconnects are included in that time window. Unknown or mixed diagnostics, truncated captures, invalid output, authentication/model/quota failures, cancellation, and failed cleanup or termination are not retried. Both endpoints cancel execution and retry waits when the client disconnects.
+
+Both POST endpoints return a server-generated `X-Request-ID` (`call_` plus 32 lowercase hexadecimal characters), including validation failures. The same ID correlates typed failure/recovery diagnostics in the production request logger, independently of `CODEX_CALL_LOGGING`. These diagnostics contain attempt counts, elapsed time, bounded failure categories and verified status codes, without raw streams, prompts, responses, URLs, credentials or command paths.
 
 Reasoning effort defaults to `medium` and can be overridden by `reasoning.effort` on Responses or `reasoning_effort` on Chat Completions. Responses `text.format` supports `{ "type": "text" }`, `{ "type": "json_object" }`, and strict `{ "type": "json_schema", "name": "...", "schema": { ... } }`.
 
@@ -129,4 +133,4 @@ npm run build
 
 The real CLI tests verify its exact version, required features, prohibited shell features, and rejection of an unavailable explicit permissions profile before inference. Unit regressions verify that requirements alone cannot pass startup and that the managed permissions catalog matches the home profile. Linux release gates must additionally set `CODEXAPI_TEST_REQUIRE_MANAGED_POLICY=1` inside a transient systemd namespace with both read-only binds from the selected unit: the complete `deploy/codex-managed` directory at `/etc/codex` and its pinned native vendor artifacts at `/usr/local/lib/codexapi-cli`. This test-only setting requires successful startup attestation and verifies that `--enable unified_exec` cannot override managed requirements. It is never a server configuration setting. Use the sibling production runbook at `C:\PROJECTS\ludora\ludora-admin\docs\production-deployment.md` (VM: `/opt/ludora/ludora-admin/docs/production-deployment.md`) for the namespace command and deployment verification.
 
-Call logging can contain prompts and responses. Keep it off unless local diagnosis specifically requires it.
+Optional call-file logging records bounded metadata and excludes prompts, responses, raw CLI streams and command details. Production failure/recovery diagnostics use the request logger even when call-file logging is disabled.

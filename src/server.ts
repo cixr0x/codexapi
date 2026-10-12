@@ -129,6 +129,8 @@ export function createServer(options: CreateServerOptions = {}): FastifyInstance
   app.post("/v1/chat/completions", async (request, reply) => {
     const startedAt = Date.now();
     const callId = createCallId();
+    reply.header("X-Request-ID", callId);
+    const disconnectSignal = requestSignal(request, reply);
     let prompt: string | undefined;
     let runResult: CodexRunResult | undefined;
     let selectedModel: string | undefined;
@@ -138,6 +140,7 @@ export function createServer(options: CreateServerOptions = {}): FastifyInstance
       const model = requestModel(request.body);
       prompt = buildChatPrompt(request.body);
       const codexOptions = codexOptionsForChat(request.body, config, model);
+      codexOptions.signal = disconnectSignal;
       selectedModel = codexOptions.model;
       runResult = await runPromptWithDetails(runner, prompt, codexOptions);
       const responseBody = createChatCompletion({
@@ -145,6 +148,7 @@ export function createServer(options: CreateServerOptions = {}): FastifyInstance
         content: runResult.stdout,
         usage: runResult.usage,
       });
+      logRunnerDiagnostics(request, callId, runResult);
       await logCall(callLogger, {
         id: callId,
         startedAt,
@@ -163,6 +167,7 @@ export function createServer(options: CreateServerOptions = {}): FastifyInstance
       });
       return responseBody;
     } catch (error) {
+      logRunnerDiagnostics(request, callId, runResult, error);
       const mappedError = mapError(error, selectedModel);
       await logCall(callLogger, {
         id: callId,
@@ -189,6 +194,7 @@ export function createServer(options: CreateServerOptions = {}): FastifyInstance
   app.post("/v1/responses", async (request, reply) => {
     const startedAt = Date.now();
     const callId = createCallId();
+    reply.header("X-Request-ID", callId);
     let prompt: string | undefined;
     let runResult: CodexRunResult | undefined;
     let outputText: string | undefined;
@@ -253,6 +259,7 @@ export function createServer(options: CreateServerOptions = {}): FastifyInstance
         textFormat: format ?? { type: "text" },
         usage: runResult.usage,
       });
+      logRunnerDiagnostics(request, callId, runResult);
       await logCall(callLogger, {
         id: callId,
         startedAt,
@@ -271,6 +278,7 @@ export function createServer(options: CreateServerOptions = {}): FastifyInstance
       });
       return responseBody;
     } catch (error) {
+      logRunnerDiagnostics(request, callId, runResult, error);
       preparedImagesCleanupSafe = !(
         error instanceof CodexRunnerError && error.childMayBeRunning
       );
@@ -663,6 +671,29 @@ function runnerErrorCommand(error: unknown): CodexRunResult["command"] {
 
 function createCallId(): string {
   return `call_${randomUUID().replaceAll("-", "")}`;
+}
+
+function logRunnerDiagnostics(request: FastifyRequest, callId: string, result?: CodexRunResult, error?: unknown): void {
+  const runnerError = error instanceof CodexRunnerError ? error : undefined;
+  const diagnostic = runnerError?.diagnostics ?? result?.diagnostics;
+  if (error === undefined && diagnostic?.failureCategory !== "recovered") return;
+  if (!diagnostic && !runnerError && !(error instanceof StructuredOutputError)) return;
+  // Project only typed operational metadata. Raw Error objects and CLI captures
+  // never reach the request logger, regardless of optional call-file logging.
+  const fields = {
+    callId,
+    attemptCount: diagnostic?.attemptCount ?? 1,
+    elapsedMs: diagnostic?.elapsedMs ?? 0,
+    ...(diagnostic?.runnerCode === undefined && runnerError?.code === undefined ? {} : { runnerCode: diagnostic?.runnerCode ?? runnerError?.code }),
+    ...(diagnostic?.originalRunnerCode === undefined ? {} : { originalRunnerCode: diagnostic.originalRunnerCode }),
+    ...(diagnostic?.exitCode === undefined && runnerError?.exitCode === undefined ? {} : { exitCode: diagnostic?.exitCode ?? runnerError?.exitCode }),
+    failureCategory: error instanceof StructuredOutputError ? "invalid_output" : diagnostic?.failureCategory ?? "unknown_cli_failure",
+    ...(diagnostic?.upstreamStatus === undefined ? {} : { upstreamStatus: diagnostic.upstreamStatus }),
+    reconnectCount: diagnostic?.reconnectCount ?? 0,
+    captureComplete: diagnostic?.captureComplete ?? runnerError?.captureComplete ?? true,
+  };
+  if (error === undefined) request.log.info(fields, "Codex execution recovered.");
+  else request.log.warn(fields, "Codex execution failed.");
 }
 
 function hasStatusCode(error: unknown): error is { statusCode: number } {
