@@ -90,6 +90,39 @@ describe("Codex recovery route contracts", () => {
     } finally { await app.close(); }
   });
 
+  it.each(endpoints)("correlates malformed JSON before parsing and rejects a spoofed incoming ID on %s", async (endpoint) => {
+    const runner: CodexRunner = { run: vi.fn(async () => "unused") };
+    const app = createServer({ config, runner });
+    const logs: unknown[] = [];
+    app.addHook("onRequest", (request, _reply, done) => {
+      vi.spyOn(request.log, "info").mockImplementation((fields: unknown) => { logs.push(fields); });
+      done();
+    });
+    try {
+      const reply = await app.inject({
+        method: "POST", url: endpoint,
+        headers: { "content-type": "application/json", "x-request-id": "call_00000000000000000000000000000000" },
+        payload: '{"private input secret":',
+      });
+      expect(reply.statusCode).toBe(400);
+      expect(reply.json().error).toMatchObject({ type: "invalid_request_error", code: "bad_request" });
+      expect(reply.headers["x-request-id"]).toMatch(/^call_[0-9a-f]{32}$/);
+      expect(reply.headers["x-request-id"]).not.toBe("call_00000000000000000000000000000000");
+      expect(logs).toEqual([{ callId: reply.headers["x-request-id"] }]);
+      expect(JSON.stringify(logs)).not.toMatch(/private|secret|00000000000000000000000000000000/);
+      expect(runner.run).not.toHaveBeenCalled();
+    } finally { await app.close(); }
+  });
+
+  it("keeps early POST correlation scoped away from unrelated GET routes", async () => {
+    const app = createServer({ config, runner: { run: async () => "unused" } });
+    try {
+      const reply = await app.inject({ method: "GET", url: "/health" });
+      expect(reply.statusCode).toBe(200);
+      expect(reply.headers["x-request-id"]).toBeUndefined();
+    } finally { await app.close(); }
+  });
+
   it.each(endpoints)("logs only typed error diagnostics with optional call logging off on %s", async (endpoint) => {
     const runner: CodexRunner = { run: async () => "unused", runWithDetails: async () => {
       const error = new CodexRunnerError({ code: "NON_ZERO_EXIT", message: "raw private error", exitCode: 1, stdout: "secret generated output", stderr: "Authorization Bearer secret https://private.test C:/private-path" });

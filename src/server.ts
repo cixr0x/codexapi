@@ -86,6 +86,15 @@ export function createServer(options: CreateServerOptions = {}): FastifyInstance
   const requestSignal = options.requestSignal ?? createClientDisconnectSignal;
 
   const app = Fastify({ logger: options.logger ?? false });
+  const requestCallIds = new WeakMap<FastifyRequest, string>();
+  const correlateRequest = async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
+    const callId = createCallId();
+    requestCallIds.set(request, callId);
+    reply.header("X-Request-ID", callId);
+    // This route hook runs before body parsing. The existing request logger binds
+    // its service request ID to our independent call ID without logging the body.
+    request.log.info({ callId }, "Codex request received.");
+  };
 
   void app.register(cors, { origin: true });
 
@@ -126,10 +135,9 @@ export function createServer(options: CreateServerOptions = {}): FastifyInstance
     data: [],
   }));
 
-  app.post("/v1/chat/completions", async (request, reply) => {
+  app.post("/v1/chat/completions", { onRequest: correlateRequest }, async (request, reply) => {
     const startedAt = Date.now();
-    const callId = createCallId();
-    reply.header("X-Request-ID", callId);
+    const callId = requestCallIds.get(request)!;
     const disconnectSignal = requestSignal(request, reply);
     let prompt: string | undefined;
     let runResult: CodexRunResult | undefined;
@@ -191,10 +199,9 @@ export function createServer(options: CreateServerOptions = {}): FastifyInstance
     }
   });
 
-  app.post("/v1/responses", async (request, reply) => {
+  app.post("/v1/responses", { onRequest: correlateRequest }, async (request, reply) => {
     const startedAt = Date.now();
-    const callId = createCallId();
-    reply.header("X-Request-ID", callId);
+    const callId = requestCallIds.get(request)!;
     let prompt: string | undefined;
     let runResult: CodexRunResult | undefined;
     let outputText: string | undefined;
